@@ -103,6 +103,12 @@ if __name__ == "__main__":
     d = mujoco.MjData(m)
     m.opt.timestep = simulation_dt
 
+    # Set the initial base height lower
+    d.qpos[2] = 0.65
+    # Set initial joint positions before starting the viewer
+    d.qpos[7:7+num_actions] = default_angles
+    mujoco.mj_forward(m, d) # Update kinematics for the visualizer
+
     # load policy
     policy = torch.jit.load(policy_path)
 
@@ -205,8 +211,12 @@ if __name__ == "__main__":
                 obs_tensor = torch.from_numpy(obs).unsqueeze(0)
                 # policy inference
                 action = policy(obs_tensor).detach().numpy().squeeze()
-                # transform action to target_dof_pos
-                target_dof_pos = action * action_scale + default_angles
+                # Warmup: Smoothly blend the action scale from 0 to 1 over the first 1 second
+                warmup_time = 0.5 # seconds
+                current_time = counter * simulation_dt
+                alpha = min(1.0, current_time / warmup_time)
+                # transform action to target_dof_pos with alpha
+                target_dof_pos = (action * alpha) * action_scale + default_angles
 
                 # Pick up changes to the physics state, apply perturbations, update options from GUI.
                 viewer.sync()

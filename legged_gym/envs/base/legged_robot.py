@@ -370,6 +370,10 @@ class LeggedRobot(BaseTask):
         """ Random pushes the robots. Emulates an impulse by setting a randomized base velocity. 
         """
         env_ids = torch.arange(self.num_envs, device=self.device)
+        # Ensure we do not aggressively push the robot on the very first frame of an episode
+        # valid_episodes = self.episode_length_buf[env_ids] > 0
+        # interval_mask = self.episode_length_buf[env_ids] % int(self.cfg.domain_rand.push_interval) == 0
+        # push_env_ids = env_ids[valid_episodes & interval_mask]
         push_env_ids = env_ids[self.episode_length_buf[env_ids] % int(self.cfg.domain_rand.push_interval) == 0]
         if len(push_env_ids) == 0:
             return
