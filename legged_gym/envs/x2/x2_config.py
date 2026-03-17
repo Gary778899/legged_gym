@@ -2,7 +2,7 @@ from legged_gym.envs.base.legged_robot_config import LeggedRobotCfg, LeggedRobot
 
 class X2RoughCfg( LeggedRobotCfg ):
     class init_state( LeggedRobotCfg.init_state ):
-        pos = [0.0, 0.0, 0.7] # x,y,z [m]
+        pos = [0.0, 0.0, 0.67] # x,y,z [m]
         default_joint_angles = { # = target angles [rad] when action = 0.0
            'left_hip_pitch_joint' : -0.248,
            'left_hip_roll_joint' : 0.0,
@@ -68,7 +68,7 @@ class X2RoughCfg( LeggedRobotCfg ):
   
     class rewards( LeggedRobotCfg.rewards ):
         soft_dof_pos_limit = 0.9
-        base_height_target = 0.68
+        base_height_target = 0.65
         
         class scales( LeggedRobotCfg.rewards.scales ):
             tracking_lin_vel = 1.5
