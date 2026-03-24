@@ -9,6 +9,11 @@ from legged_gym import LEGGED_GYM_ROOT_DIR
 import torch
 import yaml
 
+try:
+    from deploy.deploy_mujoco.mujoco_logger import MujocoLogger
+except ModuleNotFoundError:
+    from mujoco_logger import MujocoLogger
+
 
 def get_gravity_orientation(quaternion):
     qw = quaternion[0]
@@ -50,6 +55,8 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("config_file", type=str, help="config file name in the config folder")
     parser.add_argument("--record", action="store_true", help="Record video from the track camera")
+    parser.add_argument("--log_csv", action="store_true", help="Enable per-step MuJoCo logging to CSV")
+    parser.add_argument("--log_output", type=str, default="mujoco_log.csv", help="Output CSV file for MuJoCo logging (default: mujoco_log.csv)")
     parser.add_argument("--camera", type=str, default="track", help="Camera name to use for recording")
     parser.add_argument("--output_file", type=str, default="recorded_video.mp4", help="Output video file (default: recorded_video.mp4)")
     parser.add_argument("--video_width", type=int, default=1920, help="Video width for recording (default: 1920)")
@@ -159,6 +166,16 @@ if __name__ == "__main__":
         out = None
         record_interval = 0.0
 
+    logger = None
+    if args.log_csv:
+        logger = MujocoLogger(
+            joint_names=[f"joint_{i}" for i in range(num_actions)],
+            qpos_slice=slice(7, 7 + num_actions),
+            qvel_slice=slice(6, 6 + num_actions),
+            torque_slice=slice(0, num_actions),
+        )
+
+
     with mujoco.viewer.launch_passive(m, d) as viewer:
         wall_start = time.time()
         sim_start = d.time
@@ -175,10 +192,11 @@ if __name__ == "__main__":
             # Control all joints using PD controller
             tau = pd_control(target_dof_pos, d.qpos[7:7+num_actions], kps, np.zeros_like(kds), d.qvel[6:6+num_actions], kds)
             d.ctrl[:num_actions] = tau
-            
             # mj_step can be replaced with code that also evaluates
             # a policy and applies a control signal before stepping the physics.
             mujoco.mj_step(m, d)
+            if logger is not None:
+                logger.log_step(d)
 
             counter += 1
             if counter % control_decimation == 0:
@@ -262,3 +280,7 @@ if __name__ == "__main__":
             print(f"  Video duration: {frame_count / args.record_fps:.2f}s at {args.record_fps:.1f} FPS")
             print(f"{'='*60}")
             print(f"\nThe video playback speed matches the simulation speed.")
+
+        if logger is not None:
+            logger.save_to_csv(args.log_output)
+            print(f"MuJoCo log saved to: {args.log_output}")
