@@ -145,6 +145,7 @@ tests/
 
 # exported csv
 /csv
+*.csv
 
 # mypy
 .mypy_cache/

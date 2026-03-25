@@ -1,6 +1,7 @@
 import time
 import glob
 import os
+from pathlib import Path
 
 import mujoco.viewer
 import mujoco
@@ -13,6 +14,14 @@ try:
     from deploy.deploy_mujoco.mujoco_logger import MujocoLogger
 except ModuleNotFoundError:
     from mujoco_logger import MujocoLogger
+
+
+CSV_ROOT_DIR = Path(LEGGED_GYM_ROOT_DIR) / "csv"
+
+
+def resolve_csv_output_path(filename: str) -> Path:
+    output_name = Path(filename).name
+    return CSV_ROOT_DIR / output_name
 
 
 def get_gravity_orientation(quaternion):
@@ -56,7 +65,7 @@ if __name__ == "__main__":
     parser.add_argument("config_file", type=str, help="config file name in the config folder")
     parser.add_argument("--record", action="store_true", help="Record video from the track camera")
     parser.add_argument("--log_csv", action="store_true", help="Enable per-step MuJoCo logging to CSV")
-    parser.add_argument("--log_output", type=str, default="mujoco_log.csv", help="Output CSV file for MuJoCo logging (default: mujoco_log.csv)")
+    parser.add_argument("--log_output", type=str, default="mujoco_log.csv", help="Output CSV file name under csv/ (default: mujoco_log.csv)")
     parser.add_argument("--camera", type=str, default="track", help="Camera name to use for recording")
     parser.add_argument("--output_file", type=str, default="recorded_video.mp4", help="Output video file (default: recorded_video.mp4)")
     parser.add_argument("--video_width", type=int, default=1920, help="Video width for recording (default: 1920)")
@@ -230,9 +239,9 @@ if __name__ == "__main__":
                 # policy inference
                 action = policy(obs_tensor).detach().numpy().squeeze()
                 # Warmup: Smoothly blend the action scale from 0 to 1 over the first 1 second
-                warmup_time = 0.5 # seconds
+                warmup_time = 0. # seconds
                 current_time = counter * simulation_dt
-                alpha = min(1.0, current_time / warmup_time)
+                alpha = min(1.0, current_time / warmup_time) if warmup_time > 0 else 1.0
                 # transform action to target_dof_pos with alpha
                 target_dof_pos = (action * alpha) * action_scale + default_angles
 
@@ -282,5 +291,7 @@ if __name__ == "__main__":
             print(f"\nThe video playback speed matches the simulation speed.")
 
         if logger is not None:
-            logger.save_to_csv(args.log_output)
-            print(f"MuJoCo log saved to: {args.log_output}")
+            CSV_ROOT_DIR.mkdir(parents=True, exist_ok=True)
+            log_output_path = resolve_csv_output_path(args.log_output)
+            logger.save_to_csv(str(log_output_path))
+            print(f"MuJoCo log saved to: {log_output_path}")

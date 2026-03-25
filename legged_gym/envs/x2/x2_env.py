@@ -4,6 +4,7 @@ from legged_gym.envs.base.legged_robot import LeggedRobot
 from isaacgym.torch_utils import *
 from isaacgym import gymtorch, gymapi, gymutil
 import torch
+import numpy as np
 
 class X2Robot(LeggedRobot):
     
@@ -55,7 +56,7 @@ class X2Robot(LeggedRobot):
     def _post_physics_step_callback(self):
         self.update_feet_state()
 
-        period = 0.8
+        period = 1.0
         offset = 0.5
         self.phase = (self.episode_length_buf * self.dt) % period / period
         self.phase_left = self.phase
@@ -122,3 +123,27 @@ class X2Robot(LeggedRobot):
     def _reward_hip_pos(self):
         return torch.sum(torch.square(self.dof_pos[:,[1,2,7,8]]), dim=1)
     
+    def _reward_symmetry_gait(self):
+        mirror_pairs = [
+            [0, 6],
+            [1, 7],
+            [2, 8],
+            [3, 9],
+            [4, 10],
+            [5, 11],
+        ]
+
+        reward = torch.zeros(self.num_envs, device=self.device)
+        for left_idx, right_idx in mirror_pairs:
+            diff = self.dof_pos[:, left_idx] - self.dof_pos[:, right_idx]
+            reward += torch.square(diff)
+        reward = reward / len(mirror_pairs)
+
+        command_threshold = float(getattr(self.cfg.rewards, "command_threshold", 0.1))
+        yaw_command_threshold = float(getattr(self.cfg.rewards, "yaw_command_threshold", 0.3))
+        is_moving = torch.norm(self.commands[:, :2], dim=1) > command_threshold
+        not_turning = torch.abs(self.commands[:, 2]) < yaw_command_threshold
+        reward = reward * (is_moving & not_turning).float()
+
+        return reward
+        

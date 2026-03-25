@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib
+from pathlib import Path
 from typing import Iterable, Sequence
 
 import numpy as np
@@ -69,37 +70,43 @@ class MujocoLogger:
 
     def reset(self) -> None:
         self.times: list[float] = []
+        self.base_qpos: list[np.ndarray] = []
+        self.base_lin_vel: list[np.ndarray] = []
         self.qpos: list[np.ndarray] = []
         self.qvel: list[np.ndarray] = []
         self.ctrl: list[np.ndarray] = []
-        self.actuator_force: list[np.ndarray] = []
 
     def __len__(self) -> int:
         return len(self.times)
 
     def log_step(self, data) -> None:
+        base_qpos = self._as_float32_copy(data.qpos[0:7])
+        base_lin_vel = self._as_float32_copy(data.qvel[0:3])
         qpos = self._as_float32_copy(data.qpos[self.qpos_slice])
         qvel = self._as_float32_copy(data.qvel[self.qvel_slice])
         ctrl = self._as_float32_copy(data.ctrl[self.torque_slice])
-        actuator_force = self._as_float32_copy(data.actuator_force[self.torque_slice])
 
         expected = len(self.joint_names)
-        if not (len(qpos) == len(qvel) == len(ctrl) == len(actuator_force) == expected):
+        if not (len(qpos) == len(qvel) == len(ctrl) == expected):
             raise ValueError(
                 "Logged vector lengths do not match configured joint count; "
                 f"expected {expected}, got qpos={len(qpos)}, qvel={len(qvel)}, "
-                f"ctrl={len(ctrl)}, actuator_force={len(actuator_force)}"
+                f"ctrl={len(ctrl)}"
             )
 
         self.times.append(float(data.time))
+        self.base_qpos.append(base_qpos)
+        self.base_lin_vel.append(base_lin_vel)
         self.qpos.append(qpos)
         self.qvel.append(qvel)
         self.ctrl.append(ctrl)
-        self.actuator_force.append(actuator_force)
 
     def save_to_csv(self, filename: str):
         if len(self) == 0:
             raise ValueError("No samples were logged; call log_step(data) before saving")
+
+        output_path = Path(filename)
+        output_path.parent.mkdir(parents=True, exist_ok=True)
 
         try:
             pd = importlib.import_module("pandas")
@@ -111,15 +118,16 @@ class MujocoLogger:
         rows = []
         for index in range(len(self)):
             row = {"time": self.times[index]}
+            for base_idx in range(7):
+                row[f"base_qpos_{base_idx}"] = float(self.base_qpos[index][base_idx])
+            for vel_idx in range(3):
+                row[f"base_lin_vel_{vel_idx}"] = float(self.base_lin_vel[index][vel_idx])
             for joint_index, joint_name in enumerate(self.joint_names):
                 row[f"qpos_{joint_name}"] = float(self.qpos[index][joint_index])
                 row[f"qvel_{joint_name}"] = float(self.qvel[index][joint_index])
                 row[f"ctrl_{joint_name}"] = float(self.ctrl[index][joint_index])
-                row[f"actuator_force_{joint_name}"] = float(
-                    self.actuator_force[index][joint_index]
-                )
             rows.append(row)
 
         dataframe = pd.DataFrame(rows)
-        dataframe.to_csv(filename, index=False)
+        dataframe.to_csv(output_path, index=False)
         return dataframe

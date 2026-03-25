@@ -69,6 +69,8 @@ class X2RoughCfg( LeggedRobotCfg ):
     class rewards( LeggedRobotCfg.rewards ):
         soft_dof_pos_limit = 0.9
         base_height_target = 0.65
+        command_threshold = 0.1
+        yaw_command_threshold = 0.3
         
         class scales( LeggedRobotCfg.rewards.scales ):
             tracking_lin_vel = 1.5
@@ -78,16 +80,18 @@ class X2RoughCfg( LeggedRobotCfg ):
             orientation = -1.0
             base_height = -10.0
             dof_acc = -2.5e-7
-            dof_vel = -1e-3
+            dof_vel = -0.001
             feet_air_time = 0.2
             collision = 0.0
             action_rate = -0.01
             dof_pos_limits = -5.0
             alive = 0.15
-            hip_pos = -1.0
+            hip_pos = -1.2
             contact_no_vel = -0.2
-            feet_swing_height = -20.0
+            feet_swing_height = -15.0
             contact = 0.0
+            symmetry_gait = 0.0
+            stand_still = -0.
 
 class X2RoughCfgPPO( LeggedRobotCfgPPO ):
     class policy:
