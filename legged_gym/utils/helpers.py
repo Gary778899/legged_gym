@@ -11,6 +11,7 @@ from datetime import datetime
 import subprocess
 from typing import Optional
 import enum
+from omegaconf import OmegaConf, DictConfig, ListConfig
 from isaacgym import gymapi
 from isaacgym import gymutil
 
@@ -43,6 +44,25 @@ def update_class_from_dict(obj, dict):
         else:
             setattr(obj, key, val)
     return
+
+def update_class_from_omegaconf(cfg_class, dict_cfg: DictConfig):
+    for key, value in dict_cfg.items():
+        if hasattr(cfg_class, key):
+            orig_attr = getattr(cfg_class, key)
+            if isinstance(value, DictConfig):
+                if isinstance(orig_attr, dict):
+                    orig_attr.update(OmegaConf.to_container(value, resolve=True))
+                elif isinstance(orig_attr, type) or hasattr(orig_attr, "__dict__"):
+                    update_class_from_omegaconf(orig_attr, value)
+                else:
+                    setattr(cfg_class, key, OmegaConf.to_container(value, resolve=True))
+            elif isinstance(value, ListConfig):
+                setattr(cfg_class, key, OmegaConf.to_container(value, resolve=True))
+            else:
+                setattr(cfg_class, key, value)
+        else:
+            cfg_name = cfg_class.__name__ if hasattr(cfg_class, "__name__") else type(cfg_class).__name__
+            print(f"[Warning] Key '{key}' not found in configuration class {cfg_name}. Ignoring.")
 
 def set_seed(seed):
     if seed == -1:
@@ -110,6 +130,15 @@ def update_cfg_from_args(env_cfg, cfg_train, args):
         # num envs
         if args.num_envs is not None:
             env_cfg.env.num_envs = args.num_envs
+        if hasattr(env_cfg, "domain_rand"):
+            # CLI policy: domain randomization is disabled by default
+            enable_domain_rand = bool(getattr(args, "domain_rand", False))
+            if hasattr(env_cfg.domain_rand, "randomize_friction"):
+                env_cfg.domain_rand.randomize_friction = enable_domain_rand
+            if hasattr(env_cfg.domain_rand, "randomize_base_mass"):
+                env_cfg.domain_rand.randomize_base_mass = enable_domain_rand
+            if hasattr(env_cfg.domain_rand, "push_robots"):
+                env_cfg.domain_rand.push_robots = enable_domain_rand
     if cfg_train is not None:
         if args.seed is not None:
             cfg_train.seed = args.seed
@@ -127,11 +156,33 @@ def update_cfg_from_args(env_cfg, cfg_train, args):
         if args.checkpoint is not None:
             cfg_train.runner.checkpoint = args.checkpoint
 
+    omega_args = getattr(args, "omegaconf_overrides", None)
+    if omega_args is None:
+        omega_args = [arg for arg in sys.argv[1:] if ('=' in arg and not arg.startswith('-'))]
+    if omega_args:
+        cli_conf = OmegaConf.from_cli(omega_args)
+        if env_cfg is not None:
+            env_overrides = {k: v for k, v in cli_conf.items() if hasattr(env_cfg, k)}
+            if env_overrides:
+                update_class_from_omegaconf(env_cfg, OmegaConf.create(env_overrides))
+        if cfg_train is not None:
+            train_overrides = {k: v for k, v in cli_conf.items() if hasattr(cfg_train, k)}
+            if train_overrides:
+                update_class_from_omegaconf(cfg_train, OmegaConf.create(train_overrides))
+
+        unknown_keys = [
+            k for k in cli_conf.keys()
+            if (env_cfg is None or not hasattr(env_cfg, k)) and (cfg_train is None or not hasattr(cfg_train, k))
+        ]
+        for key in unknown_keys:
+            print(f"[Warning] OmegaConf override root key '{key}' did not match env_cfg or cfg_train. Ignoring.")
+
     return env_cfg, cfg_train
 
 def get_args():
     custom_parameters = [
-        {"name": "--task", "type": str, "default": "go2", "help": "Resume training or start testing from a checkpoint. Overrides config file if provided."},
+        {"name": "--task", "type": str, "default": "x2", "help": "Resume training or start testing from a checkpoint. Overrides config file if provided."},
+        {"name": "--domain_rand", "action": "store_true", "default": False, "help": "Enable domain randomization overrides."},
         {"name": "--resume", "action": "store_true", "default": False,  "help": "Resume training from a checkpoint"},
         {"name": "--experiment_name", "type": str,  "help": "Name of the experiment to run or load. Overrides config file if provided."},
         {"name": "--run_name", "type": str,  "help": "Name of the run. Overrides config file if provided."},
@@ -146,15 +197,27 @@ def get_args():
         {"name": "--max_iterations", "type": int, "help": "Maximum number of training iterations. Overrides config file if provided."},
     ]
     # parse arguments
-    args = gymutil.parse_arguments(
-        description="RL Policy",
-        custom_parameters=custom_parameters)
+    import argparse
+    old_parse_args = argparse.ArgumentParser.parse_args
+    argparse.ArgumentParser.parse_args = lambda self, args=None, namespace=None: self.parse_known_args(args, namespace)[0]
+    try:
+        args = gymutil.parse_arguments(
+            description="RL Policy",
+            custom_parameters=custom_parameters)
+    finally:
+        argparse.ArgumentParser.parse_args = old_parse_args
 
     # name allignment
     args.sim_device_id = args.compute_device_id
     args.sim_device = args.sim_device_type
     if args.sim_device=='cuda':
         args.sim_device += f":{args.sim_device_id}"
+
+    omega_args = [arg for arg in sys.argv[1:] if ('=' in arg and not arg.startswith('-'))]
+    args.omegaconf_overrides = omega_args
+    if omega_args:
+        print(f"[OmegaConf] CLI overrides: {' '.join(omega_args)}")
+
     return args
 
 def export_policy_as_jit(actor_critic, path):

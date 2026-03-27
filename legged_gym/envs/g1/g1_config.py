@@ -90,6 +90,21 @@ class G1RoughCfg( LeggedRobotCfg ):
 
 class G1RoughCfgPPO( LeggedRobotCfgPPO ):
     class policy:
+        """
+        Policy configuration class for the G1 robot's neural network policy.
+
+        Attributes:
+            init_noise_std (float): Initial standard deviation for noise during exploration. Set to 0.8.
+            actor_hidden_dims (list): Hidden layer dimensions for the actor network. Single layer with 32 units.
+            critic_hidden_dims (list): Hidden layer dimensions for the critic network. Single layer with 32 units.
+            activation (str): Activation function for hidden layers. Currently set to 'elu'.
+                Supported options: 'elu', 'relu', 'selu', 'crelu', 'lrelu', 'tanh', 'sigmoid'.
+            rnn_type (str): Type of recurrent neural network architecture for the 'ActorCriticRecurrent' policy.
+                Set to 'lstm' (Long Short-Term Memory), which allows the policy to process sequential information
+                and maintain temporal context across multiple timesteps in the episode.
+            rnn_hidden_size (int): Number of hidden units in the RNN layer. Set to 64.
+            rnn_num_layers (int): Number of stacked RNN layers. Set to 1.
+        """
         init_noise_std = 0.8
         actor_hidden_dims = [32]
         critic_hidden_dims = [32]
@@ -103,7 +118,7 @@ class G1RoughCfgPPO( LeggedRobotCfgPPO ):
         entropy_coef = 0.01
     class runner( LeggedRobotCfgPPO.runner ):
         policy_class_name = "ActorCriticRecurrent"
-        max_iterations = 10000
+        max_iterations = 2000
         run_name = ''
         experiment_name = 'g1'
 
