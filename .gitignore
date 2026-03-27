@@ -124,6 +124,8 @@ celerybeat.pid
 # Environments
 .env
 .venv
+.claude
+.github
 env/
 venv/
 ENV/

@@ -96,8 +96,8 @@ class X2RoughCfg( LeggedRobotCfg ):
 class X2RoughCfgPPO( LeggedRobotCfgPPO ):
     class policy:
         init_noise_std = 0.8
-        actor_hidden_dims = [32]
-        critic_hidden_dims = [32]
+        actor_hidden_dims = [256, 128]
+        critic_hidden_dims = [256, 128]
         activation = 'elu' # can be elu, relu, selu, crelu, lrelu, tanh, sigmoid
         # only for 'ActorCriticRecurrent':
         rnn_type = 'lstm'
