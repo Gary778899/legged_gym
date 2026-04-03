@@ -19,12 +19,8 @@ except ModuleNotFoundError:
 CSV_ROOT_DIR = Path(LEGGED_GYM_ROOT_DIR) / "csv"
 
 
-def resolve_csv_output_path(filename: str) -> Path:
-    output_name = Path(filename).name
-    return CSV_ROOT_DIR / output_name
-
-
 def get_gravity_orientation(quaternion):
+    """Calculates the gravity vector in the robot's local frame from the base orientation quaternion."""
     qw = quaternion[0]
     qx = quaternion[1]
     qy = quaternion[2]
@@ -56,6 +52,25 @@ def resolve_policy_path(policy_path):
         f"The provided filename {policy_path} does not exist, and no matching exported policy was found"
     )
 
+def resolve_csv_output_path(filename: str) -> Path:
+    output_name = Path(filename).name
+    return CSV_ROOT_DIR / output_name
+
+def as_float32_vector(values, expected_len):
+    vector = np.asarray(values, dtype=np.float32)
+    if vector.shape != (expected_len,):
+        raise ValueError(f"Expected a vector of length {expected_len}, got shape {vector.shape}")
+    return vector
+
+
+def get_startup_command_alpha(current_time_s, mode, hold_time_s, ramp_time_s):
+    if mode == "zero_hold":
+        return 0.0 if current_time_s < hold_time_s else 1.0
+    if mode == "ramp_from_zero":
+        if ramp_time_s <= 0.0:
+            return 1.0
+        return min(1.0, current_time_s / ramp_time_s)
+    return 1.0
 
 if __name__ == "__main__":
     # get config file name from command line
@@ -66,6 +81,17 @@ if __name__ == "__main__":
     parser.add_argument("--record", action="store_true", help="Record video from the track camera")
     parser.add_argument("--log_csv", action="store_true", help="Enable per-step MuJoCo logging to CSV")
     parser.add_argument("--log_output", type=str, default="mujoco_log.csv", help="Output CSV file name under csv/ (default: mujoco_log.csv)")
+    parser.add_argument("--push-test", action="store_true", help="Enable the push test defined in the config")
+    parser.add_argument("--push-time", type=float, default=None, help="Override push start time in seconds")
+    parser.add_argument("--push-duration", type=float, default=None, help="Override push duration in seconds")
+    parser.add_argument(
+        "--push-force",
+        type=float,
+        nargs=3,
+        metavar=("FX", "FY", "FZ"),
+        default=None,
+        help="Override the world-frame push force vector",
+    )
     parser.add_argument("--camera", type=str, default="track", help="Camera name to use for recording")
     parser.add_argument("--output_file", type=str, default="recorded_video.mp4", help="Output video file (default: recorded_video.mp4)")
     parser.add_argument("--video_width", type=int, default=1920, help="Video width for recording (default: 1920)")
@@ -107,6 +133,44 @@ if __name__ == "__main__":
         
         cmd = np.array(config["cmd_init"], dtype=np.float32)
 
+        startup_command_config = config.get("startup_command", {})
+        startup_command_mode = str(startup_command_config.get("mode", "disabled")).lower()
+        startup_command_hold_time_s = float(startup_command_config.get("hold_time_s", 0.0))
+        startup_command_ramp_time_s = float(startup_command_config.get("ramp_time_s", 0.0))
+
+        valid_startup_modes = {"disabled", "zero_hold", "ramp_from_zero"}
+        if startup_command_mode not in valid_startup_modes:
+            raise ValueError(
+                f"startup_command.mode must be one of {sorted(valid_startup_modes)}, got '{startup_command_mode}'"
+            )
+        if startup_command_hold_time_s < 0.0:
+            raise ValueError("startup_command.hold_time_s must be nonnegative")
+        if startup_command_ramp_time_s < 0.0:
+            raise ValueError("startup_command.ramp_time_s must be nonnegative")
+
+        if startup_command_mode == "zero_hold" and startup_command_ramp_time_s > 0.0:
+            raise ValueError("startup_command.ramp_time_s must be 0 when mode is 'zero_hold'")
+        if startup_command_mode == "ramp_from_zero" and startup_command_hold_time_s > 0.0:
+            raise ValueError("startup_command.hold_time_s must be 0 when mode is 'ramp_from_zero'")
+
+        # Push test parameters
+        push_config = config.get("push_test", {})
+        push_enabled = bool(push_config.get("enabled", False) or args.push_test)
+        push_start_time_s = float(push_config.get("start_time_s", 10.0))
+        push_duration_s = float(push_config.get("duration_s", 0.10))
+        push_force_world = as_float32_vector(push_config.get("force_world", [0.0, 0.0, 0.0]), 3)
+        push_body_name = str(push_config.get("body_name", "pelvis")) # Default to "pelvis" if not specified
+
+        if args.push_time is not None:
+            push_start_time_s = float(args.push_time)
+        if args.push_duration is not None:
+            push_duration_s = float(args.push_duration)
+        if args.push_force is not None:
+            push_force_world = as_float32_vector(args.push_force, 3)
+
+        if push_enabled and push_duration_s <= 0.0:
+            raise ValueError("push_test.duration_s must be greater than zero when push_test is enabled")
+
     # define context variables
     action = np.zeros(num_actions, dtype=np.float32)
     target_dof_pos = default_angles.copy()
@@ -119,8 +183,12 @@ if __name__ == "__main__":
     d = mujoco.MjData(m)
     m.opt.timestep = simulation_dt
 
-    # Set the initial base height lower
-    d.qpos[2] = 0.65
+    push_body_id = None
+    if push_enabled:
+        push_body_id = mujoco.mj_name2id(m, mujoco.mjtObj.mjOBJ_BODY, push_body_name)
+        if push_body_id < 0:
+            raise ValueError(f"Push body '{push_body_name}' was not found in the MuJoCo model")
+
     # Set initial joint positions before starting the viewer
     d.qpos[7:7+num_actions] = default_angles
     mujoco.mj_forward(m, d) # Update kinematics for the visualizer
@@ -175,6 +243,7 @@ if __name__ == "__main__":
         out = None
         record_interval = 0.0
 
+    # Setup logger if enabled
     logger = None
     if args.log_csv:
         logger = MujocoLogger(
@@ -196,8 +265,27 @@ if __name__ == "__main__":
             print(
                 f"Recording started. Max simulated duration: {simulation_duration}s. Close viewer to stop early."
             )
+        if push_enabled:
+            print(
+                "Push test enabled: "
+                f"body={push_body_name}, start_time={push_start_time_s:.3f}s, "
+                f"duration={push_duration_s:.3f}s, force_world={push_force_world.tolist()}"
+            )
+        if startup_command_mode == "zero_hold":
+            print(f"Startup command mode: zero_hold, hold_time={startup_command_hold_time_s:.3f}s")
+        elif startup_command_mode == "ramp_from_zero":
+            print(f"Startup command mode: ramp_from_zero, ramp_time={startup_command_ramp_time_s:.3f}s")
+        else:
+            print("Startup command mode: disabled")
         while viewer.is_running() and d.time - sim_start < simulation_duration:
             step_start = time.time()
+            sim_time = d.time - sim_start
+            push_active = push_enabled and (sim_time >= push_start_time_s) and (sim_time < push_start_time_s + push_duration_s)
+
+            d.xfrc_applied[:] = 0.0
+            if push_active and push_body_id is not None:
+                d.xfrc_applied[push_body_id, :3] = push_force_world
+
             # Control all joints using PD controller
             tau = pd_control(target_dof_pos, d.qpos[7:7+num_actions], kps, np.zeros_like(kds), d.qvel[6:6+num_actions], kds)
             d.ctrl[:num_actions] = tau
@@ -205,7 +293,7 @@ if __name__ == "__main__":
             # a policy and applies a control signal before stepping the physics.
             mujoco.mj_step(m, d)
             if logger is not None:
-                logger.log_step(d)
+                logger.log_step(d, push_active=push_active, push_force_world=push_force_world if push_active else None)
 
             counter += 1
             if counter % control_decimation == 0:
@@ -222,15 +310,22 @@ if __name__ == "__main__":
                 gravity_orientation = get_gravity_orientation(quat)
                 omega = omega * ang_vel_scale
 
-                period = 0.8
+                period = 1.0
                 count = counter * simulation_dt
                 phase = count % period / period
                 sin_phase = np.sin(2 * np.pi * phase)
                 cos_phase = np.cos(2 * np.pi * phase)
+                current_time = counter * simulation_dt
+                cmd_alpha = get_startup_command_alpha(
+                    current_time,
+                    startup_command_mode,
+                    startup_command_hold_time_s,
+                    startup_command_ramp_time_s,
+                )
 
                 obs[:3] = omega
                 obs[3:6] = gravity_orientation
-                obs[6:9] = cmd * cmd_scale
+                obs[6:9] = (cmd * cmd_alpha) * cmd_scale
                 obs[9 : 9 + num_actions] = qj
                 obs[9 + num_actions : 9 + 2 * num_actions] = dqj
                 obs[9 + 2 * num_actions : 9 + 3 * num_actions] = action
@@ -239,8 +334,7 @@ if __name__ == "__main__":
                 # policy inference
                 action = policy(obs_tensor).detach().numpy().squeeze()
                 # Warmup: Smoothly blend the action scale from 0 to 1 over the first 1 second
-                warmup_time = 0. # seconds
-                current_time = counter * simulation_dt
+                warmup_time = 0.5 # seconds
                 alpha = min(1.0, current_time / warmup_time) if warmup_time > 0 else 1.0
                 # transform action to target_dof_pos with alpha
                 target_dof_pos = (action * alpha) * action_scale + default_angles
