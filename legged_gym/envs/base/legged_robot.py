@@ -370,15 +370,14 @@ class LeggedRobot(BaseTask):
         """ Random pushes the robots. Emulates an impulse by setting a randomized base velocity. 
         """
         env_ids = torch.arange(self.num_envs, device=self.device)
-        # Ensure we do not aggressively push the robot on the very first frame of an episode
-        # valid_episodes = self.episode_length_buf[env_ids] > 0
-        # interval_mask = self.episode_length_buf[env_ids] % int(self.cfg.domain_rand.push_interval) == 0
-        # push_env_ids = env_ids[valid_episodes & interval_mask]
-        push_env_ids = env_ids[self.episode_length_buf[env_ids] % int(self.cfg.domain_rand.push_interval) == 0]
+        push_delay_steps = int(getattr(self.cfg.domain_rand, "push_delay_steps", 0))
+        valid_episodes = self.episode_length_buf[env_ids] >= push_delay_steps
+        interval_mask = self.episode_length_buf[env_ids] % int(self.cfg.domain_rand.push_interval) == 0
+        push_env_ids = env_ids[valid_episodes & interval_mask]
         if len(push_env_ids) == 0:
             return
         max_vel = self.cfg.domain_rand.max_push_vel_xy
-        self.root_states[:, 7:9] = torch_rand_float(-max_vel, max_vel, (self.num_envs, 2), device=self.device) # lin vel x/y
+        self.root_states[push_env_ids, 7:9] = torch_rand_float(-max_vel, max_vel, (len(push_env_ids), 2), device=self.device) # lin vel x/y
         
         env_ids_int32 = push_env_ids.to(dtype=torch.int32)
         self.gym.set_actor_root_state_tensor_indexed(self.sim,

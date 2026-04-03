@@ -334,7 +334,7 @@ if __name__ == "__main__":
                 # policy inference
                 action = policy(obs_tensor).detach().numpy().squeeze()
                 # Warmup: Smoothly blend the action scale from 0 to 1 over the first 1 second
-                warmup_time = 0.5 # seconds
+                warmup_time = 0. # seconds
                 alpha = min(1.0, current_time / warmup_time) if warmup_time > 0 else 1.0
                 # transform action to target_dof_pos with alpha
                 target_dof_pos = (action * alpha) * action_scale + default_angles
