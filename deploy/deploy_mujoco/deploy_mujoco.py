@@ -72,6 +72,126 @@ def get_startup_command_alpha(current_time_s, mode, hold_time_s, ramp_time_s):
         return min(1.0, current_time_s / ramp_time_s)
     return 1.0
 
+
+def validate_onnx_metadata(policy_path, yaml_config):
+    """Validate ONNX model metadata against deployment config.
+    
+    Returns dict with:
+        - validated: bool (all checks passed or no metadata found)
+        - warnings: list of warning strings
+        - errors: list of error strings (non-fatal; user can proceed with explicit flag)
+    """
+    import json
+    
+    result = {"validated": True, "warnings": [], "errors": []}
+    
+    # Try to load metadata sidecar
+    onnx_path = str(policy_path).replace(".pt", ".onnx")
+    metadata_sidecar = onnx_path + ".meta.json"
+    
+    if not os.path.exists(metadata_sidecar):
+        result["warnings"].append(
+            f"No ONNX metadata sidecar found at {metadata_sidecar}. "
+            "Skipping metadata validation. Ensure deployment config matches training config."
+        )
+        return result
+    
+    try:
+        with open(metadata_sidecar, "r") as f:
+            metadata = json.load(f)
+    except Exception as exc:
+        result["warnings"].append(f"Failed to load ONNX metadata: {exc}")
+        return result
+    
+    metadata_payload = metadata.get("metadata", {})
+    
+    # Validate dimensions
+    meta_num_obs = metadata_payload.get("num_observations")
+    meta_num_actions = metadata_payload.get("num_actions")
+    if meta_num_obs is not None and meta_num_obs != yaml_config.get("num_obs"):
+        result["errors"].append(
+            f"Observation dimension mismatch: metadata={meta_num_obs}, YAML={yaml_config.get('num_obs')}"
+        )
+    if meta_num_actions is not None and meta_num_actions != yaml_config.get("num_actions"):
+        result["errors"].append(
+            f"Action dimension mismatch: metadata={meta_num_actions}, YAML={yaml_config.get('num_actions')}"
+        )
+    
+    # Validate control parameters (kp/kd)
+    meta_control = metadata_payload.get("control", {})
+    meta_kp = meta_control.get("kp")
+    meta_kd = meta_control.get("kd")
+    
+    if meta_kp is not None:
+        yaml_kps = yaml_config.get("kps", [])
+        # Flatten dict kp if present; otherwise expect list
+        if isinstance(meta_kp, dict):
+            meta_kp_list = list(meta_kp.values())
+        else:
+            meta_kp_list = meta_kp if isinstance(meta_kp, list) else [meta_kp]
+        
+        if len(meta_kp_list) > 0 and len(yaml_kps) > 0:
+            if not np.allclose(meta_kp_list, yaml_kps, rtol=1e-5):
+                result["errors"].append(
+                    f"Joint stiffness (kp) mismatch between metadata and YAML config. "
+                    f"Ensure training and deployment use same control parameters."
+                )
+    
+    if meta_kd is not None:
+        yaml_kds = yaml_config.get("kds", [])
+        if isinstance(meta_kd, dict):
+            meta_kd_list = list(meta_kd.values())
+        else:
+            meta_kd_list = meta_kd if isinstance(meta_kd, list) else [meta_kd]
+        
+        if len(meta_kd_list) > 0 and len(yaml_kds) > 0:
+            if not np.allclose(meta_kd_list, yaml_kds, rtol=1e-5):
+                result["errors"].append(
+                    f"Joint damping (kd) mismatch between metadata and YAML config. "
+                    f"Ensure training and deployment use same control parameters."
+                )
+    
+    # Validate normalization scales
+    meta_norm = metadata_payload.get("normalization", {})
+    meta_obs_scales = meta_norm.get("obs_scales", {})
+    
+    yaml_ang_vel_scale = yaml_config.get("ang_vel_scale")
+    meta_ang_vel_scale = meta_obs_scales.get("ang_vel")
+    if meta_ang_vel_scale is not None and yaml_ang_vel_scale is not None:
+        if not np.isclose(meta_ang_vel_scale, yaml_ang_vel_scale, rtol=1e-5):
+            result["errors"].append(
+                f"Angular velocity scale mismatch: metadata={meta_ang_vel_scale}, YAML={yaml_ang_vel_scale}"
+            )
+    
+    yaml_dof_pos_scale = yaml_config.get("dof_pos_scale")
+    meta_dof_pos_scale = meta_obs_scales.get("dof_pos")
+    if meta_dof_pos_scale is not None and yaml_dof_pos_scale is not None:
+        if not np.isclose(meta_dof_pos_scale, yaml_dof_pos_scale, rtol=1e-5):
+            result["errors"].append(
+                f"DOF position scale mismatch: metadata={meta_dof_pos_scale}, YAML={yaml_dof_pos_scale}"
+            )
+    
+    yaml_dof_vel_scale = yaml_config.get("dof_vel_scale")
+    meta_dof_vel_scale = meta_obs_scales.get("dof_vel")
+    if meta_dof_vel_scale is not None and yaml_dof_vel_scale is not None:
+        if not np.isclose(meta_dof_vel_scale, yaml_dof_vel_scale, rtol=1e-5):
+            result["errors"].append(
+                f"DOF velocity scale mismatch: metadata={meta_dof_vel_scale}, YAML={yaml_dof_vel_scale}"
+            )
+    
+    yaml_action_scale = yaml_config.get("action_scale")
+    meta_action_scale = meta_control.get("action_scale")
+    if meta_action_scale is not None and yaml_action_scale is not None:
+        if not np.isclose(meta_action_scale, yaml_action_scale, rtol=1e-5):
+            result["errors"].append(
+                f"Action scale mismatch: metadata={meta_action_scale}, YAML={yaml_action_scale}"
+            )
+    
+    if result["errors"]:
+        result["validated"] = False
+    
+    return result
+
 if __name__ == "__main__":
     # get config file name from command line
     import argparse
@@ -170,6 +290,21 @@ if __name__ == "__main__":
 
         if push_enabled and push_duration_s <= 0.0:
             raise ValueError("push_test.duration_s must be greater than zero when push_test is enabled")
+
+        # Validate ONNX metadata against deployment config
+        print("\n[Deployment] Validating policy metadata...")
+        metadata_validation = validate_onnx_metadata(policy_path, config)
+        if metadata_validation["warnings"]:
+            for warning in metadata_validation["warnings"]:
+                print(f"[Warning] {warning}")
+        if metadata_validation["errors"]:
+            print("[Error] Model metadata validation failed with the following mismatches:")
+            for error in metadata_validation["errors"]:
+                print(f"  - {error}")
+            print("\nTo proceed despite mismatches, ensure YAML config matches training config.")
+            print("Deployment will still proceed; however, policy behavior may differ from training.")
+        else:
+            print("[OK] Policy metadata matches deployment configuration.")
 
     # define context variables
     action = np.zeros(num_actions, dtype=np.float32)
