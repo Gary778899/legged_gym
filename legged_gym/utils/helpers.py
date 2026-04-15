@@ -475,6 +475,10 @@ def write_run_onnx_metadata_once(log_dir: Optional[str], metadata: Dict[str, Any
     if not log_dir:
         return
 
+    # install_training_onnx_export_hook can run before save_training_config,
+    # so ensure the run directory exists before writing metadata.
+    os.makedirs(log_dir, exist_ok=True)
+
     shared_metadata_path = os.path.join(log_dir, "onnx_metadata.json")
     if os.path.exists(shared_metadata_path):
         return
