@@ -262,11 +262,17 @@ class OnnxPolicyExporterLSTM(torch.nn.Module):
             next_hidden_state: updated hidden state
             next_cell_state: updated cell state
         """
-        out, (next_hidden_state, next_cell_state) = self.memory(
-            obs.unsqueeze(0) if obs.dim() == 1 else obs,
-            (hidden_state, cell_state)
-        )
-        action = self.actor(out.squeeze(0) if out.size(0) == 1 and out.dim() > 2 else out)
+        # LSTM expects input as (seq_len, batch, input_size).
+        # Keep hidden/cell as 3D (num_layers, batch, hidden_size), so obs must be 3D too.
+        if obs.dim() == 1:
+            obs = obs.unsqueeze(0).unsqueeze(0)
+        elif obs.dim() == 2:
+            obs = obs.unsqueeze(0)
+        elif obs.dim() != 3:
+            raise ValueError(f"Expected obs to be 1D/2D/3D tensor, got shape {tuple(obs.shape)}")
+
+        out, (next_hidden_state, next_cell_state) = self.memory(obs, (hidden_state, cell_state))
+        action = self.actor(out.squeeze(0))
         return action, next_hidden_state, next_cell_state
 
 
