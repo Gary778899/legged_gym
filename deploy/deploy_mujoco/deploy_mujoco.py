@@ -85,22 +85,31 @@ def validate_onnx_metadata(policy_path, yaml_config):
     
     result = {"validated": True, "warnings": [], "errors": []}
     
-    # Try to load metadata sidecar
+    # Try shared run-level metadata first, then fall back to legacy per-ONNX sidecar.
     onnx_path = str(policy_path).replace(".pt", ".onnx")
+    shared_metadata_path = os.path.join(os.path.dirname(onnx_path), "onnx_metadata.json")
     metadata_sidecar = onnx_path + ".meta.json"
+    metadata = None
     
-    if not os.path.exists(metadata_sidecar):
+    if os.path.exists(shared_metadata_path):
+        try:
+            with open(shared_metadata_path, "r") as f:
+                metadata = json.load(f)
+        except Exception as exc:
+            result["warnings"].append(f"Failed to load shared ONNX metadata: {exc}")
+
+    if metadata is None and os.path.exists(metadata_sidecar):
+        try:
+            with open(metadata_sidecar, "r") as f:
+                metadata = json.load(f)
+        except Exception as exc:
+            result["warnings"].append(f"Failed to load ONNX sidecar metadata: {exc}")
+
+    if metadata is None:
         result["warnings"].append(
-            f"No ONNX metadata sidecar found at {metadata_sidecar}. "
+            f"No ONNX metadata found at {shared_metadata_path} or {metadata_sidecar}. "
             "Skipping metadata validation. Ensure deployment config matches training config."
         )
-        return result
-    
-    try:
-        with open(metadata_sidecar, "r") as f:
-            metadata = json.load(f)
-    except Exception as exc:
-        result["warnings"].append(f"Failed to load ONNX metadata: {exc}")
         return result
     
     metadata_payload = metadata.get("metadata", {})

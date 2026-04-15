@@ -380,6 +380,7 @@ def export_policy_as_onnx(
         onnx_path: str,
         num_obs: Optional[int] = None,
         metadata: Optional[Dict[str, Any]] = None,
+        write_sidecar: bool = True,
         opset_version: int = 17,
 ):
     """Export actor policy to ONNX and attach validation metadata.
@@ -452,20 +453,43 @@ def export_policy_as_onnx(
     metadata_payload["onnx_opset_version"] = int(opset_version)
     metadata_result = _write_onnx_metadata(onnx_path, metadata_payload)
 
-    manifest = {
-        "onnx_file": os.path.basename(onnx_path),
-        "metadata_embedded": metadata_result["written"],
-        "metadata_embed_reason": metadata_result["reason"],
-        "metadata": metadata_payload,
-    }
-    with open(onnx_path + ".meta.json", "w", encoding="utf-8") as f:
-        json.dump(_sanitize_for_serialization(manifest), f, indent=2, ensure_ascii=False)
+    if write_sidecar:
+        manifest = {
+            "onnx_file": os.path.basename(onnx_path),
+            "metadata_embedded": metadata_result["written"],
+            "metadata_embed_reason": metadata_result["reason"],
+            "metadata": metadata_payload,
+        }
+        with open(onnx_path + ".meta.json", "w", encoding="utf-8") as f:
+            json.dump(_sanitize_for_serialization(manifest), f, indent=2, ensure_ascii=False)
 
     if not metadata_result["written"]:
         print(f"[Warning] ONNX metadata was not embedded for {onnx_path}: {metadata_result['reason']}")
     
     if is_recurrent:
         print(f"[ONNX] Recurrent policy (LSTM) exported. Deploy with batch_size=1 or reshape on inference side.")
+
+
+def write_run_onnx_metadata_once(log_dir: Optional[str], metadata: Dict[str, Any], opset_version: int) -> None:
+    """Write one shared ONNX metadata sidecar per run directory."""
+    if not log_dir:
+        return
+
+    shared_metadata_path = os.path.join(log_dir, "onnx_metadata.json")
+    if os.path.exists(shared_metadata_path):
+        return
+
+    payload = dict(metadata or {})
+    payload["onnx_opset_version"] = int(opset_version)
+    payload["checkpoint_file"] = None
+
+    manifest = {
+        "metadata_embedded": False,
+        "metadata_embed_reason": "run-level shared metadata file",
+        "metadata": payload,
+    }
+    with open(shared_metadata_path, "w", encoding="utf-8") as f:
+        json.dump(_sanitize_for_serialization(manifest), f, indent=2, ensure_ascii=False)
 
 
 def install_training_onnx_export_hook(
@@ -483,6 +507,13 @@ def install_training_onnx_export_hook(
 
     original_save = ppo_runner.save
     num_obs = int(getattr(env_cfg.env, "num_observations"))
+    run_metadata = build_onnx_policy_metadata(
+        env_cfg=env_cfg,
+        train_cfg=train_cfg,
+        args=args,
+        checkpoint_file=None,
+    )
+    write_run_onnx_metadata_once(getattr(ppo_runner, "log_dir", None), run_metadata, opset_version)
 
     def _save_with_onnx(path, *args_, **kwargs_):
         result = original_save(path, *args_, **kwargs_)
@@ -504,6 +535,7 @@ def install_training_onnx_export_hook(
                 onnx_path=onnx_path,
                 num_obs=num_obs,
                 metadata=metadata,
+                write_sidecar=False,
                 opset_version=opset_version,
             )
             print(f"[ONNX] Exported {onnx_path} alongside {checkpoint_file}")
