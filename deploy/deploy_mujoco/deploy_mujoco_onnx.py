@@ -11,8 +11,4 @@ except ModuleNotFoundError:
 
 
 if __name__ == "__main__":
-    print(
-        "[Deprecation] deploy_mujoco.py defaults to PyTorch backend. "
-        "Use deploy_mujoco_pytorch.py or deploy_mujoco_onnx.py explicitly."
-    )
-    run("pytorch")
+    run("onnx")

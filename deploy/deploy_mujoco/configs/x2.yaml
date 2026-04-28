@@ -1,6 +1,10 @@
-# 
-#policy_path: "{LEGGED_GYM_ROOT_DIR}/logs/x2/exported/*_policies/policy_lstm_1.pt"
-policy_path: "{LEGGED_GYM_ROOT_DIR}/logs/x2/exported/Apr02_15-39-42_baseline_dr_policies/policy_lstm_1.pt"
+#
+# Legacy key retained for compatibility with older scripts:
+# policy_path: "{LEGGED_GYM_ROOT_DIR}/logs/x2/exported/*_policies/policy_lstm_1.pt"
+policy_path_pt: "{LEGGED_GYM_ROOT_DIR}/logs/x2/exported/Apr15_16-14-17_onnx_test1_policies/policy_lstm_1.pt"
+# ONNX models are exported during training into run folders under logs/x2/<run_name>/model_*.onnx.
+# The deploy script will resolve this glob to the most recently modified ONNX file.
+policy_path_onnx: "{LEGGED_GYM_ROOT_DIR}/logs/x2/*/model_*.onnx"
 xml_path: "{LEGGED_GYM_ROOT_DIR}/resources/robots/x2/mjcf/scene.xml"
 
 # Total simulation time
@@ -24,7 +28,7 @@ cmd_scale: [2.0, 2.0, 0.25]
 num_actions: 12
 num_obs: 47
 
-cmd_init: [0., 0, 0]
+cmd_init: [0.5, 0, 0]
 
 startup_command:
     mode: zero_hold

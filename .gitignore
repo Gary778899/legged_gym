@@ -142,8 +142,9 @@ venv.bak/
 # mkdocs documentation
 /site
 
-# tests
+# tests and devs
 tests/
+dev/
 
 # exported csv
 /csv

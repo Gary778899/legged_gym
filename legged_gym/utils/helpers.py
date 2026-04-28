@@ -1,5 +1,6 @@
 import os
 import copy
+import re
 import numpy as np
 import random
 import sys
@@ -109,19 +110,34 @@ def get_load_path(root, load_run=-1, checkpoint=-1):
         last_run = os.path.join(root, runs[-1])
     except:
         raise ValueError("No runs in this directory: " + root)
+
     if load_run==-1:
-        load_run = last_run
+        load_run_path = last_run
     else:
-        load_run = os.path.join(root, load_run)
+        # Support both run-name inputs (relative to root) and explicit checkpoint paths.
+        load_run_path = load_run if os.path.isabs(load_run) else os.path.join(root, load_run)
+
+    # If an explicit file is provided, use it directly.
+    if os.path.isfile(load_run_path):
+        return load_run_path
+
+    if not os.path.isdir(load_run_path):
+        raise FileNotFoundError(f"Run path does not exist or is not a directory: {load_run_path}")
 
     if checkpoint==-1:
-        models = [file for file in os.listdir(load_run) if 'model' in file]
-        models.sort(key=lambda m: '{0:0>15}'.format(m))
-        model = models[-1]
+        # Only consider torch checkpoints, not ONNX files or metadata.
+        model_pattern = re.compile(r"^model_(\d+)\.pt$")
+        models = [file for file in os.listdir(load_run_path) if model_pattern.match(file)]
+        if not models:
+            raise ValueError(f"No .pt checkpoints found in run directory: {load_run_path}")
+        model = max(models, key=lambda m: int(model_pattern.match(m).group(1)))
     else:
-        model = "model_{}.pt".format(checkpoint) 
+        model = "model_{}.pt".format(checkpoint)
+        model_path = os.path.join(load_run_path, model)
+        if not os.path.isfile(model_path):
+            raise FileNotFoundError(f"Requested checkpoint not found: {model_path}")
 
-    load_path = os.path.join(load_run, model)
+    load_path = os.path.join(load_run_path, model)
     return load_path
 
 def update_cfg_from_args(env_cfg, cfg_train, args):
