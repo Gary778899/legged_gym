@@ -183,3 +183,6 @@ videos
 
 # txt files
 *.txt
+
+# agibot SDK
+aimsdk/
