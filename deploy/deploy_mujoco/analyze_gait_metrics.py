@@ -14,6 +14,9 @@ WARMUP_SKIP_SEC = 0.5
 STARTUP_START_SEC = 0.0
 STARTUP_END_SEC = 2.0
 STARTUP_FALLBACK_STEPS = 400
+PUSH_RECOVERY_WINDOW_SEC = 5.0
+PUSH_SETTLE_THRESHOLD = 0.03
+PUSH_SETTLE_WINDOW_SEC = 0.5
 CSV_ROOT_DIR = Path(__file__).resolve().parents[2] / "csv"
 
 
@@ -329,6 +332,102 @@ def summarize_startup(
     }
 
 
+def detect_push_window(dataframe: pd.DataFrame):
+    if "push_active" not in dataframe.columns:
+        return None
+
+    push_mask = dataframe["push_active"].astype(bool).to_numpy()
+    if not np.any(push_mask):
+        return None
+
+    push_indices = np.flatnonzero(push_mask)
+    start_idx = int(push_indices[0])
+    end_idx = int(push_indices[-1])
+
+    if "time" in dataframe.columns:
+        time_values = dataframe["time"].to_numpy(dtype=np.float64)
+        start_time = float(time_values[start_idx])
+        end_time = float(time_values[end_idx])
+    else:
+        start_time = float(start_idx)
+        end_time = float(end_idx)
+
+    return {
+        "start_idx": start_idx,
+        "end_idx": end_idx,
+        "start_time": start_time,
+        "end_time": end_time,
+    }
+
+
+def summarize_push(
+    dataframe: pd.DataFrame,
+    base_height_target: float,
+    recovery_window_sec: float,
+    settle_threshold: float,
+):
+    push_window = detect_push_window(dataframe)
+    if push_window is None:
+        return None
+
+    if "time" not in dataframe.columns:
+        raise KeyError("Push metrics require a time column in the CSV")
+    if "base_qpos_2" not in dataframe.columns:
+        raise KeyError("Missing expected column: base_qpos_2")
+
+    recovery_start_time = push_window["end_time"]
+    recovery_end_time = recovery_start_time + recovery_window_sec
+    recovery_df = dataframe[(dataframe["time"] > recovery_start_time) & (dataframe["time"] <= recovery_end_time)].copy()
+    if len(recovery_df) < 2:
+        recovery_df = dataframe[dataframe["time"] > recovery_start_time].copy()
+
+    if len(recovery_df) == 0:
+        return {
+            "push_start_time": push_window["start_time"],
+            "push_end_time": push_window["end_time"],
+            "push_duration_logged": float(push_window["end_time"] - push_window["start_time"]),
+            "push_recovery_window_sec": recovery_window_sec,
+            "push_recovery_samples": 0,
+            "push_recovery_height_abs_err_mean": np.nan,
+            "push_recovery_height_abs_err_std": np.nan,
+            "push_recovery_height_abs_err_max": np.nan,
+            "push_recovery_action_rate_rms": np.nan,
+            "push_recovery_control_effort_mean_abs": np.nan,
+            "push_recovery_max_abs_delta_ctrl": np.nan,
+            "push_settling_time_s": np.nan,
+        }
+
+    height_err = np.abs(recovery_df["base_qpos_2"].to_numpy(dtype=np.float64) - base_height_target)
+    ctrl_metrics = estimate_ctrl_metrics(recovery_df)
+
+    settling_time_s = np.nan
+    time_values = recovery_df["time"].to_numpy(dtype=np.float64)
+    dt_values = np.diff(time_values)
+    dt_values = dt_values[np.isfinite(dt_values) & (dt_values > 0)]
+    if len(dt_values) > 0:
+        median_dt = float(np.median(dt_values))
+        settle_steps = max(1, int(np.ceil(PUSH_SETTLE_WINDOW_SEC / median_dt)))
+        for start_idx in range(0, len(height_err) - settle_steps + 1):
+            if np.all(height_err[start_idx : start_idx + settle_steps] < settle_threshold):
+                settling_time_s = float(time_values[start_idx] - recovery_start_time)
+                break
+
+    return {
+        "push_start_time": push_window["start_time"],
+        "push_end_time": push_window["end_time"],
+        "push_duration_logged": float(push_window["end_time"] - push_window["start_time"]),
+        "push_recovery_window_sec": recovery_window_sec,
+        "push_recovery_samples": int(len(recovery_df)),
+        "push_recovery_height_abs_err_mean": float(np.mean(height_err)),
+        "push_recovery_height_abs_err_std": float(np.std(height_err)),
+        "push_recovery_height_abs_err_max": float(np.max(height_err)),
+        "push_recovery_action_rate_rms": ctrl_metrics["action_rate_rms"],
+        "push_recovery_control_effort_mean_abs": ctrl_metrics["control_effort_mean_abs"],
+        "push_recovery_max_abs_delta_ctrl": ctrl_metrics["max_abs_delta_ctrl"],
+        "push_settling_time_s": settling_time_s,
+    }
+
+
 def evaluate_logging_frequency(
     full_df: pd.DataFrame,
     dominant_freq_hz: float,
@@ -384,6 +483,7 @@ def write_summary_txt(
     input_csv: Path,
     settings: dict,
     startup_metrics: dict,
+    push_metrics: dict | None,
     steady_metrics: dict,
     height_metrics: dict,
     logging_eval: dict,
@@ -406,6 +506,12 @@ def write_summary_txt(
     for key, value in startup_metrics.items():
         lines.append(f"{key}: {_format_metric(value)}")
     lines.append("")
+    if push_metrics is not None:
+        lines.append("Push Metrics")
+        lines.append("------------")
+        for key, value in push_metrics.items():
+            lines.append(f"{key}: {_format_metric(value)}")
+        lines.append("")
     lines.append("Steady-State Metrics")
     lines.append("--------------------")
     for key, value in steady_metrics.items():
@@ -460,6 +566,18 @@ def main():
         help="Fallback startup steps when time column is unavailable",
     )
     parser.add_argument(
+        "--push_recovery_window_sec",
+        type=float,
+        default=PUSH_RECOVERY_WINDOW_SEC,
+        help="Window length after the push used for recovery metrics",
+    )
+    parser.add_argument(
+        "--push_settle_threshold",
+        type=float,
+        default=PUSH_SETTLE_THRESHOLD,
+        help="Absolute base-height error threshold for settling time estimation",
+    )
+    parser.add_argument(
         "--dtw_radius",
         type=int,
         default=200,
@@ -496,6 +614,12 @@ def main():
         mirror_pairs,
         base_height_target=args.base_height_target,
     )
+    push_metrics = summarize_push(
+        full_df,
+        base_height_target=args.base_height_target,
+        recovery_window_sec=args.push_recovery_window_sec,
+        settle_threshold=args.push_settle_threshold,
+    )
     steady_metrics = summarize_run(
         steady_df,
         mirror_pairs,
@@ -519,6 +643,8 @@ def main():
         "startup_start_sec": args.startup_start_sec,
         "startup_end_sec": args.startup_end_sec,
         "startup_fallback_steps": args.startup_fallback_steps,
+        "push_recovery_window_sec": args.push_recovery_window_sec,
+        "push_settle_threshold": args.push_settle_threshold,
     }
 
     summary_txt = output_dir / f"{log_csv.stem}_summary.txt"
@@ -527,6 +653,7 @@ def main():
         input_csv=log_csv,
         settings=settings,
         startup_metrics=startup_metrics,
+        push_metrics=push_metrics,
         steady_metrics=steady_metrics,
         height_metrics=height_metrics,
         logging_eval=logging_eval,

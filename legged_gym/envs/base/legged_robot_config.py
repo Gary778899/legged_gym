@@ -95,6 +95,7 @@ class LeggedRobotCfg(BaseConfig):
         randomize_base_mass = False
         added_mass_range = [-1., 1.]
         push_robots = True
+        push_delay_steps = 10
         push_interval_s = 15
         max_push_vel_xy = 1.
 

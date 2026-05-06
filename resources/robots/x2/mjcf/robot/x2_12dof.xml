@@ -61,7 +61,7 @@
   </asset>
 
   <worldbody>
-    <body name="pelvis" pos="0 0 0.68" euler="0 0 0" childclass="x2">
+    <body name="pelvis" pos="0 0 0.65" euler="0 0 0" childclass="x2">
       <light name="tracking" mode="trackcom" pos="0 0 2"/>
       <camera name="track" pos="0 -3 1" quat="0.850651 0.525731 0 0" mode="track" />
       <freejoint name="floating_base_joint"/>

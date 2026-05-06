@@ -1,5 +1,6 @@
 import os
 import copy
+import re
 import numpy as np
 import random
 import sys
@@ -9,7 +10,7 @@ import platform
 import getpass
 from datetime import datetime
 import subprocess
-from typing import Optional
+from typing import Optional, Any, Dict
 import enum
 from omegaconf import OmegaConf, DictConfig, ListConfig
 from isaacgym import gymapi
@@ -109,19 +110,34 @@ def get_load_path(root, load_run=-1, checkpoint=-1):
         last_run = os.path.join(root, runs[-1])
     except:
         raise ValueError("No runs in this directory: " + root)
+
     if load_run==-1:
-        load_run = last_run
+        load_run_path = last_run
     else:
-        load_run = os.path.join(root, load_run)
+        # Support both run-name inputs (relative to root) and explicit checkpoint paths.
+        load_run_path = load_run if os.path.isabs(load_run) else os.path.join(root, load_run)
+
+    # If an explicit file is provided, use it directly.
+    if os.path.isfile(load_run_path):
+        return load_run_path
+
+    if not os.path.isdir(load_run_path):
+        raise FileNotFoundError(f"Run path does not exist or is not a directory: {load_run_path}")
 
     if checkpoint==-1:
-        models = [file for file in os.listdir(load_run) if 'model' in file]
-        models.sort(key=lambda m: '{0:0>15}'.format(m))
-        model = models[-1]
+        # Only consider torch checkpoints, not ONNX files or metadata.
+        model_pattern = re.compile(r"^model_(\d+)\.pt$")
+        models = [file for file in os.listdir(load_run_path) if model_pattern.match(file)]
+        if not models:
+            raise ValueError(f"No .pt checkpoints found in run directory: {load_run_path}")
+        model = max(models, key=lambda m: int(model_pattern.match(m).group(1)))
     else:
-        model = "model_{}.pt".format(checkpoint) 
+        model = "model_{}.pt".format(checkpoint)
+        model_path = os.path.join(load_run_path, model)
+        if not os.path.isfile(model_path):
+            raise FileNotFoundError(f"Requested checkpoint not found: {model_path}")
 
-    load_path = os.path.join(load_run, model)
+    load_path = os.path.join(load_run_path, model)
     return load_path
 
 def update_cfg_from_args(env_cfg, cfg_train, args):
@@ -233,6 +249,325 @@ def export_policy_as_jit(actor_critic, path):
         model = copy.deepcopy(actor_critic.actor).to('cpu')
         traced_script_module = torch.jit.script(model)
         traced_script_module.save(path)
+
+
+class OnnxPolicyExporterLSTM(torch.nn.Module):
+    """State-explicit LSTM wrapper for ONNX export.
+    
+    Exports recurrent policy with explicit hidden/cell state I/O for stateful inference.
+    Note: ONNX LSTM export requires batch_size=1; if deploying with other batch sizes,
+    handle input reshaping on the deployment side or export actor network only.
+    """
+
+    def __init__(self, actor_critic):
+        super().__init__()
+        self.actor = copy.deepcopy(actor_critic.actor)
+        self.memory = copy.deepcopy(actor_critic.memory_a.rnn)
+        self.memory.cpu()
+
+    def forward(self, obs, hidden_state, cell_state):
+        """Forward pass with explicit state I/O for ONNX compatibility.
+        
+        Args:
+            obs: (batch_size=1, num_obs) observation tensor
+            hidden_state: (num_layers, batch_size=1, hidden_size) LSTM hidden state
+            cell_state: (num_layers, batch_size=1, hidden_size) LSTM cell state
+            
+        Returns:
+            action: (batch_size=1, num_actions) policy action
+            next_hidden_state: updated hidden state
+            next_cell_state: updated cell state
+        """
+        # LSTM expects input as (seq_len, batch, input_size).
+        # Keep hidden/cell as 3D (num_layers, batch, hidden_size), so obs must be 3D too.
+        if obs.dim() == 1:
+            obs = obs.unsqueeze(0).unsqueeze(0)
+        elif obs.dim() == 2:
+            obs = obs.unsqueeze(0)
+        elif obs.dim() != 3:
+            raise ValueError(f"Expected obs to be 1D/2D/3D tensor, got shape {tuple(obs.shape)}")
+
+        out, (next_hidden_state, next_cell_state) = self.memory(obs, (hidden_state, cell_state))
+        action = self.actor(out.squeeze(0))
+        return action, next_hidden_state, next_cell_state
+
+
+def _policy_input_dim(actor_critic) -> int:
+    actor = actor_critic.actor
+    for module in actor.modules():
+        if isinstance(module, torch.nn.Linear):
+            return int(module.in_features)
+    raise ValueError("Could not infer actor input dimension for ONNX export")
+
+
+def _to_metadata_value(value: Any) -> str:
+    if isinstance(value, (str, int, float, bool)) or value is None:
+        return json.dumps(value)
+    return json.dumps(_sanitize_for_serialization(value), sort_keys=True)
+
+
+def _write_onnx_metadata(onnx_path: str, metadata: Dict[str, Any]) -> Dict[str, Any]:
+    try:
+        import onnx
+    except Exception as exc:
+        return {
+            "written": False,
+            "reason": f"onnx package unavailable: {exc}",
+        }
+
+    model = onnx.load(onnx_path)
+    merged = {prop.key: prop.value for prop in model.metadata_props}
+    for key, value in metadata.items():
+        merged[str(key)] = _to_metadata_value(value)
+
+    del model.metadata_props[:]
+    for key in sorted(merged.keys()):
+        entry = model.metadata_props.add()
+        entry.key = key
+        entry.value = merged[key]
+
+    onnx.save(model, onnx_path)
+    return {"written": True, "reason": ""}
+
+
+def build_onnx_policy_metadata(env_cfg=None, train_cfg=None, args=None, checkpoint_file: Optional[str] = None):
+    metadata = {
+        "schema_version": "1.0.0",
+        "validation_only": True,
+        "runtime_source_of_truth": "deployment_yaml",
+        "created_utc": datetime.utcnow().isoformat(timespec="seconds") + "Z",
+    }
+
+    if args is not None:
+        metadata["task"] = getattr(args, "task", None)
+        metadata["rl_device"] = getattr(args, "rl_device", None)
+
+    if checkpoint_file is not None:
+        metadata["checkpoint_file"] = checkpoint_file
+
+    if env_cfg is not None:
+        env = getattr(env_cfg, "env", None)
+        control = getattr(env_cfg, "control", None)
+        normalization = getattr(env_cfg, "normalization", None)
+
+        if env is not None:
+            metadata["num_observations"] = getattr(env, "num_observations", None)
+            metadata["num_actions"] = getattr(env, "num_actions", None)
+
+        if control is not None:
+            metadata["control"] = {
+                "control_type": getattr(control, "control_type", None),
+                "action_scale": getattr(control, "action_scale", None),
+                "decimation": getattr(control, "decimation", None),
+                # Keep kp/kd for validation against deploy YAML.
+                "kp": getattr(control, "stiffness", None),
+                "kd": getattr(control, "damping", None),
+            }
+
+        if normalization is not None:
+            metadata["normalization"] = {
+                "obs_scales": class_to_dict(getattr(normalization, "obs_scales", None)),
+                "clip_observations": getattr(normalization, "clip_observations", None),
+                "clip_actions": getattr(normalization, "clip_actions", None),
+            }
+
+    if train_cfg is not None:
+        runner = getattr(train_cfg, "runner", None)
+        policy = getattr(train_cfg, "policy", None)
+        if runner is not None:
+            metadata["runner"] = {
+                "experiment_name": getattr(runner, "experiment_name", None),
+                "run_name": getattr(runner, "run_name", None),
+                "save_interval": getattr(runner, "save_interval", None),
+                "max_iterations": getattr(runner, "max_iterations", None),
+            }
+        if policy is not None:
+            metadata["policy"] = {
+                "rnn_type": getattr(policy, "rnn_type", None),
+                "rnn_hidden_size": getattr(policy, "rnn_hidden_size", None),
+                "rnn_num_layers": getattr(policy, "rnn_num_layers", None),
+            }
+
+    return _sanitize_for_serialization(metadata)
+
+
+def export_policy_as_onnx(
+        actor_critic,
+        onnx_path: str,
+        num_obs: Optional[int] = None,
+        metadata: Optional[Dict[str, Any]] = None,
+        write_sidecar: bool = True,
+        opset_version: int = 17,
+):
+    """Export actor policy to ONNX and attach validation metadata.
+
+    Metadata intentionally does not override runtime config; it is for consistency checks.
+    """
+    onnx_path = str(onnx_path)
+    os.makedirs(os.path.dirname(onnx_path), exist_ok=True)
+
+    if num_obs is None:
+        num_obs = _policy_input_dim(actor_critic)
+    num_obs = int(num_obs)
+
+    is_recurrent = hasattr(actor_critic, "memory_a") and hasattr(actor_critic.memory_a, "rnn")
+    if is_recurrent:
+        exporter = OnnxPolicyExporterLSTM(actor_critic).to("cpu")
+        exporter.eval()
+        hidden_size = int(exporter.memory.hidden_size)
+        num_layers = int(exporter.memory.num_layers)
+        dummy_obs = torch.zeros(1, num_obs, dtype=torch.float32)
+        dummy_hidden = torch.zeros(num_layers, 1, hidden_size, dtype=torch.float32)
+        dummy_cell = torch.zeros(num_layers, 1, hidden_size, dtype=torch.float32)
+
+        import warnings
+        # LSTM batch_size warning is safe: we export with batch=1 and explicit state I/O.
+        # Suppress to reduce output noise.
+        with warnings.catch_warnings():
+            warnings.filterwarnings("ignore", message=".*batch_size other than 1.*LSTM.*")
+            torch.onnx.export(
+                exporter,
+                (dummy_obs, dummy_hidden, dummy_cell),
+                onnx_path,
+                export_params=True,
+                do_constant_folding=True,
+                opset_version=opset_version,
+                input_names=["obs", "hidden_state", "cell_state"],
+                output_names=["actions", "next_hidden_state", "next_cell_state"],
+                dynamic_axes={
+                    "obs": {0: "batch"},
+                    "actions": {0: "batch"},
+                    "hidden_state": {1: "batch"},
+                    "cell_state": {1: "batch"},
+                    "next_hidden_state": {1: "batch"},
+                    "next_cell_state": {1: "batch"},
+                },
+            )
+    else:
+        model = copy.deepcopy(actor_critic.actor).to("cpu")
+        model.eval()
+        dummy_obs = torch.zeros(1, num_obs, dtype=torch.float32)
+        torch.onnx.export(
+            model,
+            dummy_obs,
+            onnx_path,
+            export_params=True,
+            do_constant_folding=True,
+            opset_version=opset_version,
+            input_names=["obs"],
+            output_names=["actions"],
+            dynamic_axes={
+                "obs": {0: "batch"},
+                "actions": {0: "batch"},
+            },
+        )
+        print(f"[ONNX] Feedforward policy exported with batch dimension support.")
+
+    metadata_payload = dict(metadata or {})
+    metadata_payload["policy_is_recurrent"] = bool(is_recurrent)
+    metadata_payload["policy_class"] = "ActorCriticRecurrent" if is_recurrent else "ActorCritic"
+    metadata_payload["onnx_opset_version"] = int(opset_version)
+    metadata_result = _write_onnx_metadata(onnx_path, metadata_payload)
+
+    if write_sidecar:
+        manifest = {
+            "onnx_file": os.path.basename(onnx_path),
+            "metadata_embedded": metadata_result["written"],
+            "metadata_embed_reason": metadata_result["reason"],
+            "metadata": metadata_payload,
+        }
+        with open(onnx_path + ".meta.json", "w", encoding="utf-8") as f:
+            json.dump(_sanitize_for_serialization(manifest), f, indent=2, ensure_ascii=False)
+
+    if not metadata_result["written"]:
+        print(f"[Warning] ONNX metadata was not embedded for {onnx_path}: {metadata_result['reason']}")
+    
+    if is_recurrent:
+        print(f"[ONNX] Recurrent policy (LSTM) exported. Deploy with batch_size=1 or reshape on inference side.")
+
+
+def write_run_onnx_metadata_once(log_dir: Optional[str], metadata: Dict[str, Any], opset_version: int) -> None:
+    """Write one shared ONNX metadata sidecar per run directory."""
+    if not log_dir:
+        return
+
+    # install_training_onnx_export_hook can run before save_training_config,
+    # so ensure the run directory exists before writing metadata.
+    os.makedirs(log_dir, exist_ok=True)
+
+    shared_metadata_path = os.path.join(log_dir, "onnx_metadata.json")
+    if os.path.exists(shared_metadata_path):
+        return
+
+    payload = dict(metadata or {})
+    payload["onnx_opset_version"] = int(opset_version)
+    payload["checkpoint_file"] = None
+
+    manifest = {
+        "metadata_embedded": False,
+        "metadata_embed_reason": "run-level shared metadata file",
+        "metadata": payload,
+    }
+    with open(shared_metadata_path, "w", encoding="utf-8") as f:
+        json.dump(_sanitize_for_serialization(manifest), f, indent=2, ensure_ascii=False)
+
+
+def install_training_onnx_export_hook(
+        ppo_runner,
+        env_cfg,
+        train_cfg,
+        args,
+        opset_version: int = 17,
+) -> bool:
+    """Wrap runner checkpoint save so each model_N.pt emits a paired model_N.onnx."""
+    if ppo_runner is None or not hasattr(ppo_runner, "save"):
+        return False
+    if getattr(ppo_runner, "_onnx_export_hook_installed", False):
+        return True
+
+    original_save = ppo_runner.save
+    num_obs = int(getattr(env_cfg.env, "num_observations"))
+    run_metadata = build_onnx_policy_metadata(
+        env_cfg=env_cfg,
+        train_cfg=train_cfg,
+        args=args,
+        checkpoint_file=None,
+    )
+    write_run_onnx_metadata_once(getattr(ppo_runner, "log_dir", None), run_metadata, opset_version)
+
+    def _save_with_onnx(path, *args_, **kwargs_):
+        result = original_save(path, *args_, **kwargs_)
+
+        try:
+            checkpoint_path = str(path)
+            checkpoint_file = os.path.basename(checkpoint_path)
+            onnx_path = os.path.splitext(checkpoint_path)[0] + ".onnx"
+
+            metadata = build_onnx_policy_metadata(
+                env_cfg=env_cfg,
+                train_cfg=train_cfg,
+                args=args,
+                checkpoint_file=checkpoint_file,
+            )
+
+            export_policy_as_onnx(
+                actor_critic=ppo_runner.alg.actor_critic,
+                onnx_path=onnx_path,
+                num_obs=num_obs,
+                metadata=metadata,
+                write_sidecar=False,
+                opset_version=opset_version,
+            )
+            print(f"[ONNX] Exported {onnx_path} alongside {checkpoint_file}")
+        except Exception as exc:
+            print(f"[Warning] Failed to export ONNX alongside checkpoint {path}: {exc}")
+
+        return result
+
+    ppo_runner.save = _save_with_onnx
+    ppo_runner._onnx_export_hook_installed = True
+    print("[ONNX] Training checkpoint export hook installed")
+    return True
 
 
 def _try_get_git_info(cwd: str):

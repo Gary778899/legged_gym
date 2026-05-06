@@ -75,16 +75,22 @@ class MujocoLogger:
         self.qpos: list[np.ndarray] = []
         self.qvel: list[np.ndarray] = []
         self.ctrl: list[np.ndarray] = []
+        self.push_active: list[bool] = []
+        self.push_force_world: list[np.ndarray] = []
 
     def __len__(self) -> int:
         return len(self.times)
 
-    def log_step(self, data) -> None:
+    def log_step(self, data, push_active: bool = False, push_force_world: np.ndarray | None = None) -> None:
         base_qpos = self._as_float32_copy(data.qpos[0:7])
         base_lin_vel = self._as_float32_copy(data.qvel[0:3])
         qpos = self._as_float32_copy(data.qpos[self.qpos_slice])
         qvel = self._as_float32_copy(data.qvel[self.qvel_slice])
         ctrl = self._as_float32_copy(data.ctrl[self.torque_slice])
+        if push_force_world is None:
+            push_force_world = np.zeros(3, dtype=np.float32)
+        else:
+            push_force_world = self._as_float32_copy(push_force_world)
 
         expected = len(self.joint_names)
         if not (len(qpos) == len(qvel) == len(ctrl) == expected):
@@ -100,6 +106,8 @@ class MujocoLogger:
         self.qpos.append(qpos)
         self.qvel.append(qvel)
         self.ctrl.append(ctrl)
+        self.push_active.append(bool(push_active))
+        self.push_force_world.append(push_force_world)
 
     def save_to_csv(self, filename: str):
         if len(self) == 0:
@@ -126,6 +134,10 @@ class MujocoLogger:
                 row[f"qpos_{joint_name}"] = float(self.qpos[index][joint_index])
                 row[f"qvel_{joint_name}"] = float(self.qvel[index][joint_index])
                 row[f"ctrl_{joint_name}"] = float(self.ctrl[index][joint_index])
+            row["push_active"] = bool(self.push_active[index])
+            row["push_force_world_x"] = float(self.push_force_world[index][0])
+            row["push_force_world_y"] = float(self.push_force_world[index][1])
+            row["push_force_world_z"] = float(self.push_force_world[index][2])
             rows.append(row)
 
         dataframe = pd.DataFrame(rows)

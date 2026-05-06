@@ -1,6 +1,10 @@
-# 
-#policy_path: "{LEGGED_GYM_ROOT_DIR}/logs/x2/exported/*_policies/policy_lstm_1.pt"
-policy_path: "{LEGGED_GYM_ROOT_DIR}/logs/x2/exported/Mar24_22-24-43_claudetest1_policies/policy_lstm_1.pt"
+#
+# Legacy key retained for compatibility with older scripts:
+# policy_path: "{LEGGED_GYM_ROOT_DIR}/logs/x2/exported/*_policies/policy_lstm_1.pt"
+policy_path_pt: "{LEGGED_GYM_ROOT_DIR}/logs/x2/exported/Apr15_16-14-17_onnx_test1_policies/policy_lstm_1.pt"
+# ONNX models are exported during training into run folders under logs/x2/<run_name>/model_*.onnx.
+# The deploy script will resolve this glob to the most recently modified ONNX file.
+policy_path_onnx: "{LEGGED_GYM_ROOT_DIR}/logs/x2/*/model_*.onnx"
 xml_path: "{LEGGED_GYM_ROOT_DIR}/resources/robots/x2/mjcf/scene.xml"
 
 # Total simulation time
@@ -13,8 +17,8 @@ control_decimation: 4
 kps: [120, 120, 120, 150, 40, 30, 120, 120, 120, 150, 40, 30]
 kds: [5, 5, 5, 5, 3, 2, 5, 5, 5, 5, 3, 2]
 
-default_angles: [-0.248,  0.0,  0.0,  0.5303, -0.2248, 0.0, 
-                  -0.248,  0.0,  0.0,  0.5303, -0.2248, 0.0]
+default_angles: [-0.248,  0.0,  0.0,  0.5303, -0.2823, 0.0, 
+                  -0.248,  0.0,  0.0,  0.5303, -0.2823, 0.0]
 
 ang_vel_scale: 0.25
 dof_pos_scale: 1.0
@@ -24,4 +28,16 @@ cmd_scale: [2.0, 2.0, 0.25]
 num_actions: 12
 num_obs: 47
 
-cmd_init: [0.6, 0, 0]
+cmd_init: [0.5, 0, 0]
+
+startup_command:
+    mode: zero_hold
+    hold_time_s: 0.5
+    ramp_time_s: 0.0
+
+push_test:
+    enabled: false
+    start_time_s: 3.0
+    duration_s: 0.2
+    force_world: [400.0, 0.0, 0.0]
+    body_name: pelvis
