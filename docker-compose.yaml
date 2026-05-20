@@ -1,0 +1,42 @@
+services:
+  humble-dev:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      network: host
+    image: robotics_humble:v1
+    container_name: humanoid_sitl
+    network_mode: host
+    init: true
+    stdin_open: true
+    tty: true
+    working_dir: /workspace/legged_gym
+    command: ["sleep", "infinity"]
+
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+
+    environment:
+      DISPLAY: ${DISPLAY}
+      XAUTHORITY: /tmp/.Xauthority
+      NVIDIA_VISIBLE_DEVICES: all
+      NVIDIA_DRIVER_CAPABILITIES: all
+      PROJECT_ROOT: /workspace/legged_gym
+      ROS_WS: /workspace/.ros2_ws
+      PYTHONPATH: /workspace/legged_gym
+
+    volumes:
+      - .:/workspace/legged_gym
+      - ros2_overlay:/workspace/.ros2_ws
+      - uv_cache:/root/.cache/uv
+      - /tmp/.X11-unix:/tmp/.X11-unix:rw
+      - ${HOME}/.Xauthority:/tmp/.Xauthority:rw
+
+volumes:
+  ros2_overlay:
+  uv_cache:

@@ -170,6 +170,7 @@ cython_debug/
 
 # logs
 logs
+log
 record/
 
 # exported videos

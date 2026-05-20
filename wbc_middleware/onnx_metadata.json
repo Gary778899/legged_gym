@@ -1,0 +1,59 @@
+{
+  "metadata_embedded": false,
+  "metadata_embed_reason": "run-level shared metadata file",
+  "metadata": {
+    "schema_version": "1.0.0",
+    "validation_only": true,
+    "runtime_source_of_truth": "deployment_yaml",
+    "created_utc": "2026-05-06T11:11:22Z",
+    "task": "x2",
+    "rl_device": "cuda:0",
+    "num_observations": 47,
+    "num_actions": 12,
+    "control": {
+      "control_type": "P",
+      "action_scale": 0.25,
+      "decimation": 4,
+      "kp": {
+        "hip_yaw_joint": 120.0,
+        "hip_roll_joint": 120.0,
+        "hip_pitch_joint": 120.0,
+        "knee_joint": 150.0,
+        "ankle_pitch_joint": 40.0,
+        "ankle_roll_joint": 30.0
+      },
+      "kd": {
+        "hip_yaw_joint": 5.0,
+        "hip_roll_joint": 5.0,
+        "hip_pitch_joint": 5.0,
+        "knee_joint": 5.0,
+        "ankle_pitch_joint": 3.0,
+        "ankle_roll_joint": 2.0
+      }
+    },
+    "normalization": {
+      "obs_scales": {
+        "ang_vel": 0.25,
+        "dof_pos": 1.0,
+        "dof_vel": 0.05,
+        "height_measurements": 5.0,
+        "lin_vel": 2.0
+      },
+      "clip_observations": 100.0,
+      "clip_actions": 100.0
+    },
+    "runner": {
+      "experiment_name": "x2",
+      "run_name": "",
+      "save_interval": 50,
+      "max_iterations": 2000
+    },
+    "policy": {
+      "rnn_type": "lstm",
+      "rnn_hidden_size": 64,
+      "rnn_num_layers": 1
+    },
+    "onnx_opset_version": 17,
+    "checkpoint_file": null
+  }
+}

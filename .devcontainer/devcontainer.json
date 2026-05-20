@@ -1,0 +1,26 @@
+{
+  "name": "Humanoid SITL Environment",
+  "dockerComposeFile": "../docker-compose.yaml",
+  "service": "humble-dev",
+  "workspaceFolder": "/workspace/legged_gym",
+  "overrideCommand": false,
+  "shutdownAction": "stopCompose",
+  "remoteEnv": {
+    "PROJECT_ROOT": "/workspace/legged_gym",
+    "ROS_WS": "/workspace/.ros2_ws",
+    "PYTHONPATH": "/workspace/legged_gym"
+  },
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "ms-python.python",
+        "ms-vscode.cpptools",
+        "ms-iot.vscode-ros"
+      ],
+      "settings": {
+        "python.defaultInterpreterPath": "/opt/venv/bin/python",
+        "terminal.integrated.defaultProfile.linux": "bash"
+      }
+    }
+  }
+}

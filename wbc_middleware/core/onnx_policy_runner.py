@@ -3,12 +3,19 @@ import onnxruntime as ort
 
 
 class OnnxPolicyRunner:
-    def __init__(self, model_path: str, hidden_dim: int = 64, num_envs: int = 1):
+    def __init__(
+        self,
+        model_path: str,
+        hidden_dim: int,
+        num_layers: int = 1,
+        num_envs: int = 1,
+    ):
         self.session = ort.InferenceSession(model_path)
         self.hidden_dim = hidden_dim
+        self.num_layers = num_layers
         self.num_envs = num_envs
-        self.h_state = np.zeros((1, self.num_envs, self.hidden_dim), dtype=np.float32)
-        self.c_state = np.zeros((1, self.num_envs, self.hidden_dim), dtype=np.float32)
+        self.h_state = np.zeros((self.num_layers, self.num_envs, self.hidden_dim), dtype=np.float32)
+        self.c_state = np.zeros((self.num_layers, self.num_envs, self.hidden_dim), dtype=np.float32)
 
     def run(self, obs: np.ndarray) -> np.ndarray:
         inputs = {

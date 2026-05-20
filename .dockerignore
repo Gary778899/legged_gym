@@ -1,0 +1,29 @@
+# Python environments and caches
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+
+# Git and local tooling
+.git/
+.vscode/
+.claude/
+.codex/
+.agents/
+
+# Runtime artifacts
+logs/
+record/
+videos/
+csv/
+*.bag
+*.log
+
+# Local build and ROS artifacts
+build/
+dist/
+site/
+*.egg-info/
+.ros2_ws/
+

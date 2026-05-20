@@ -46,6 +46,8 @@ class RobotState:
     last_action: np.ndarray = field(
         default_factory=lambda: np.zeros(NUM_ACTIONS, dtype=np.float64)
     )
+    imu_stamp_s: float = 0.0
+    joint_stamp_s: float = 0.0
     default_joint_dict: dict[str, float] = field(
         default_factory=lambda: DEFAULT_JOINT_DICT.copy()
     )
@@ -54,3 +56,7 @@ class RobotState:
         return np.array(
             [self.default_joint_dict[name] for name in JOINT_ORDER], dtype=np.float64
         )
+
+    def set_default_dof_pos(self, dof_positions: np.ndarray) -> None:
+        for name, position in zip(JOINT_ORDER, np.asarray(dof_positions, dtype=np.float64)):
+            self.default_joint_dict[name] = float(position)
