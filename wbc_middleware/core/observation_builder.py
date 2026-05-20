@@ -14,9 +14,18 @@ def projected_gravity_from_quaternion_xyzw(quaternion: np.ndarray) -> np.ndarray
 
 
 class ObservationBuilder:
-    def __init__(self, default_dof_pos: np.ndarray, scales: ScalingValues):
+    def __init__(
+        self,
+        default_dof_pos: np.ndarray,
+        scales: ScalingValues,
+        *,
+        clip_observations: float | None = None,
+    ):
         self.default_dof_pos = np.asarray(default_dof_pos, dtype=np.float64)
         self.scales = scales
+        self.clip_observations = (
+            None if clip_observations is None else float(abs(clip_observations))
+        )
 
     def build(self, state: RobotState, commands: np.ndarray, phase: float) -> np.ndarray:
         base_ang_vel = state.gyro * self.scales.ang_vel
@@ -38,5 +47,8 @@ class ObservationBuilder:
 
         if obs.shape[1] != NUM_OBS:
             raise ValueError(f"Expected observation width {NUM_OBS}, got {obs.shape[1]}")
+
+        if self.clip_observations is not None and self.clip_observations > 0.0:
+            obs = np.clip(obs, -self.clip_observations, self.clip_observations)
 
         return obs

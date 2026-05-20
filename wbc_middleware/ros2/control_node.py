@@ -8,11 +8,12 @@ import numpy as np
 import rclpy
 from aimdk_msgs.msg import JointStateArray
 from rclpy.node import Node
+from rclpy.signals import SignalHandlerOptions
 from rclpy.qos import qos_profile_sensor_data
 from sensor_msgs.msg import Imu
 from std_srvs.srv import Trigger
 
-from wbc_middleware.core.command_mapper import CommandMapper
+from wbc_middleware.core.command_mapper import CommandMapper, SafetyLimits
 from wbc_middleware.core.command_sources import build_command_source
 from wbc_middleware.core.constants import (
     CONTROL_PERIOD_S,
@@ -22,6 +23,7 @@ from wbc_middleware.core.constants import (
     DEFAULT_JOINT_COMMAND_TOPIC,
     DEFAULT_JOINT_STATE_TOPIC,
     DEFAULT_STARTUP_TRIGGER_SERVICE,
+    DEFAULT_STOP_TRIGGER_SERVICE,
     JOINT_NAME_TO_INDEX,
 )
 from wbc_middleware.core.metadata_loader import load_runtime_metadata, load_yaml_config
@@ -36,6 +38,8 @@ class StartupState(str, Enum):
     MOVE_TO_DEFAULT = "MOVE_TO_DEFAULT"
     POLICY_HOLD = "POLICY_HOLD"
     POLICY_ACTIVE = "POLICY_ACTIVE"
+    STOPPING = "STOPPING"
+    SAFE_HOLD = "SAFE_HOLD"
 
 
 class ControlNode(Node):
@@ -67,10 +71,20 @@ class ControlNode(Node):
         self.observation_builder = ObservationBuilder(
             default_dof_pos=self.default_dof_pos,
             scales=self.scales,
+            clip_observations=self.runtime_metadata.clip_observations,
         )
+        safety_config = self.config.get("safety", {})
         self.command_mapper = CommandMapper(
             default_dof_pos=self.default_dof_pos,
             metadata=self.runtime_metadata,
+            safety_limits=SafetyLimits.from_config(
+                safety_config,
+                num_joints=len(self.default_dof_pos),
+                default_action_clip=self.runtime_metadata.clip_actions,
+                default_position_delta_clip=(
+                    self.runtime_metadata.action_scale * self.runtime_metadata.clip_actions
+                ),
+            ),
         )
         self.command_source = build_command_source(self.config.get("command_source"))
         self.command_publisher = HalCommandPublisher(
@@ -93,15 +107,25 @@ class ControlNode(Node):
             startup_config.get("move_to_default_tolerance", 0.15)
         )
         self.policy_hold_time_s = float(startup_config.get("policy_hold_time_s", 0.5))
+        self.stopping_hold_time_s = float(startup_config.get("stopping_hold_time_s", 0.5))
         self.interactive_command_timeout_s = float(
             self.config.get("interactive_command_timeout_s", 0.5)
         )
+        self.publish_safe_hold_on_shutdown = bool(
+            safety_config.get("publish_safe_hold_on_shutdown", True)
+        )
+        self.safe_hold_mode = self._resolve_safe_hold_mode(safety_config)
+        self.safe_hold_damping = self._resolve_safe_hold_damping(safety_config)
         self.imu_ready = False
         self.joints_ready = False
         self.startup_state = StartupState.IDLE
         self.policy_hold_started_at_s: float | None = None
+        self.stopping_started_at_s: float | None = None
         self.interactive_command: np.ndarray | None = None
         self.interactive_command_stamp_s: float | None = None
+        self._state_timeout_reported = False
+        self._state_ready_once = False
+        self._shutdown_requested = False
 
         imu_topic = str(self.config.get("imu_topic", DEFAULT_IMU_TOPIC))
         joint_state_topic = str(self.config.get("joint_state_topic", DEFAULT_JOINT_STATE_TOPIC))
@@ -110,6 +134,9 @@ class ControlNode(Node):
         )
         startup_service_name = str(
             self.config.get("startup_trigger_service", DEFAULT_STARTUP_TRIGGER_SERVICE)
+        )
+        stop_service_name = str(
+            self.config.get("stop_trigger_service", DEFAULT_STOP_TRIGGER_SERVICE)
         )
         self.create_subscription(Imu, imu_topic, self.imu_callback, qos_profile_sensor_data)
         self.create_subscription(
@@ -128,6 +155,11 @@ class ControlNode(Node):
             Trigger,
             startup_service_name,
             self._handle_startup_trigger,
+        )
+        self.stop_service = self.create_service(
+            Trigger,
+            stop_service_name,
+            self._handle_stop_trigger,
         )
         self.timer = self.create_timer(self.control_period_s, self._control_loop)
         self.get_logger().info(
@@ -155,6 +187,8 @@ class ControlNode(Node):
         )
         self.state.imu_stamp_s = self._clock_now_s()
         self.imu_ready = True
+        self._state_timeout_reported = False
+        self._state_ready_once = self._state_ready_once or self.joints_ready
 
     def joint_state_callback(self, msg: JointStateArray) -> None:
         for joint_data in msg.joints:
@@ -164,6 +198,8 @@ class ControlNode(Node):
                 self.state.joint_vel[index] = joint_data.velocity
         self.state.joint_stamp_s = self._clock_now_s()
         self.joints_ready = True
+        self._state_timeout_reported = False
+        self._state_ready_once = self._state_ready_once or self.imu_ready
 
     def interactive_command_callback(self, msg: Twist) -> None:
         self.interactive_command = np.array(
@@ -232,19 +268,51 @@ class ControlNode(Node):
         response.message = "Startup sequence accepted: IDLE -> MOVE_TO_DEFAULT."
         return response
 
+    def _handle_stop_trigger(
+        self, request: Trigger.Request, response: Trigger.Response
+    ) -> Trigger.Response:
+        del request
+        if self.startup_state in (StartupState.IDLE, StartupState.SAFE_HOLD):
+            response.success = False
+            response.message = (
+                f"Stop request ignored because middleware is already in {self.startup_state.value}."
+            )
+            return response
+        self.request_safe_stop("stop service requested")
+        response.success = True
+        response.message = f"Safe stop accepted: entering {self.startup_state.value}."
+        return response
+
     def _transition_to(self, next_state: StartupState) -> None:
         previous_state = self.startup_state
         self.startup_state = next_state
         if next_state is StartupState.IDLE:
             self.policy_hold_started_at_s = None
+            self.stopping_started_at_s = None
         elif next_state is StartupState.MOVE_TO_DEFAULT:
             self.policy_hold_started_at_s = None
+            self.stopping_started_at_s = None
         elif next_state is StartupState.POLICY_HOLD:
             self.reset_lstm_memory()
             self.policy_hold_started_at_s = self._clock_now_s()
+            self.stopping_started_at_s = None
         elif next_state is StartupState.POLICY_ACTIVE:
             self.policy_hold_started_at_s = None
+            self.stopping_started_at_s = None
             self.command_source.reset()
+        elif next_state is StartupState.STOPPING:
+            self.policy_hold_started_at_s = None
+            self.stopping_started_at_s = self._clock_now_s()
+            self.interactive_command = None
+            self.interactive_command_stamp_s = None
+            self.state.last_action.fill(0.0)
+        elif next_state is StartupState.SAFE_HOLD:
+            self.policy_hold_started_at_s = None
+            self.stopping_started_at_s = None
+            self.interactive_command = None
+            self.interactive_command_stamp_s = None
+            self.state.last_action.fill(0.0)
+            self.reset_lstm_memory()
         self.get_logger().info(
             f"Startup state transition: {previous_state.value} -> {next_state.value}"
         )
@@ -253,6 +321,8 @@ class ControlNode(Node):
         return float(np.max(np.abs(self.state.joint_pos - self.default_dof_pos)))
 
     def get_active_command(self) -> np.ndarray:
+        if self.startup_state is not StartupState.POLICY_ACTIVE:
+            return np.zeros(3, dtype=np.float32)
         if (
             self.interactive_command is not None
             and self.interactive_command_stamp_s is not None
@@ -262,9 +332,43 @@ class ControlNode(Node):
             return self.interactive_command.copy()
         return self.command_source.get_command()
 
-    def _control_loop(self) -> None:
-        if not self.has_fresh_state():
+    def request_safe_stop(self, reason: str) -> None:
+        if self.startup_state in (StartupState.IDLE, StartupState.STOPPING, StartupState.SAFE_HOLD):
             return
+        self._log_warning(f"Requesting safe stop: {reason}")
+        self._transition_to(StartupState.STOPPING)
+
+    def publish_safe_hold(self, reason: str | None = None) -> None:
+        if not self._context_is_ok():
+            if reason:
+                print(f"[control_middleware] Skipping safe-hold publish because ROS context is no longer valid: {reason}")
+            return
+        if reason:
+            self._log_warning(f"Publishing safe hold command: {reason}")
+        self.command_publisher.publish(self._build_safe_hold_targets())
+
+    def _handle_state_timeout(self) -> None:
+        if self._state_timeout_reported:
+            return
+        self._state_timeout_reported = True
+        self._log_warning(
+            f"HAL state timed out. Entering safe stop path with safe_hold_mode={self.safe_hold_mode}."
+        )
+        if self.startup_state not in (StartupState.IDLE, StartupState.SAFE_HOLD):
+            self.request_safe_stop("HAL state timeout")
+
+    def _control_loop(self) -> None:
+        has_fresh_state = self.has_fresh_state()
+        if not has_fresh_state:
+            if self._state_ready_once:
+                self._handle_state_timeout()
+                if self.startup_state in (StartupState.STOPPING, StartupState.SAFE_HOLD):
+                    self.publish_safe_hold()
+            return
+
+        self._state_timeout_reported = False
+        self._state_ready_once = True
+
         if self.startup_state is StartupState.IDLE:
             return
 
@@ -284,6 +388,73 @@ class ControlNode(Node):
 
         if self.startup_state is StartupState.POLICY_ACTIVE:
             self.run_policy_step()
+            return
+
+        if self.startup_state is StartupState.STOPPING:
+            self.publish_safe_hold()
+            if self.stopping_started_at_s is None:
+                self.stopping_started_at_s = self._clock_now_s()
+            if (self._clock_now_s() - self.stopping_started_at_s) >= self.stopping_hold_time_s:
+                self._transition_to(StartupState.SAFE_HOLD)
+            return
+
+        if self.startup_state is StartupState.SAFE_HOLD:
+            self.publish_safe_hold()
+
+    def shutdown_to_safe_hold(self) -> None:
+        if self._shutdown_requested:
+            return
+        self._shutdown_requested = True
+        if not self.publish_safe_hold_on_shutdown:
+            return
+        if not self._context_is_ok():
+            print("[control_middleware] ROS context already invalid during shutdown; skipping safe-hold publish.")
+            return
+        try:
+            if self.startup_state not in (StartupState.IDLE, StartupState.SAFE_HOLD):
+                self._transition_to(StartupState.SAFE_HOLD)
+            self.publish_safe_hold("node shutdown")
+        except Exception as exc:
+            self._log_warning(f"Failed to publish shutdown safe-hold command: {exc}")
+
+    def _build_safe_hold_targets(self):
+        if self.safe_hold_mode == "damping":
+            return self.command_mapper.build_damping_targets(
+                damping=self.safe_hold_damping,
+                position_reference=self.state.joint_pos,
+            )
+        return self.command_mapper.build_default_pose_targets()
+
+    def _resolve_safe_hold_mode(self, safety_config: dict) -> str:
+        safe_hold_mode = str(safety_config.get("safe_hold_mode", "hold_position")).lower()
+        if safe_hold_mode not in {"hold_position", "damping"}:
+            raise ValueError(
+                "safety.safe_hold_mode must be one of: hold_position, damping"
+            )
+        return safe_hold_mode
+
+    def _resolve_safe_hold_damping(self, safety_config: dict) -> np.ndarray:
+        damping_value = safety_config.get("safe_hold_damping")
+        if damping_value is None:
+            return self.runtime_metadata.kd.copy()
+        damping_array = np.asarray(damping_value, dtype=np.float64)
+        if damping_array.shape != self.runtime_metadata.kd.shape:
+            raise ValueError(
+                f"Expected safe_hold_damping shape {self.runtime_metadata.kd.shape}, got {damping_array.shape}"
+            )
+        return damping_array.copy()
+
+    def _context_is_ok(self) -> bool:
+        try:
+            return bool(rclpy.ok(context=self.context))
+        except Exception:
+            return False
+
+    def _log_warning(self, message: str) -> None:
+        if self._context_is_ok():
+            self.get_logger().warning(message)
+        else:
+            print(f"[control_middleware][WARN] {message}")
 
     def _clock_now_s(self) -> float:
         now = self.get_clock().now()
@@ -301,12 +472,14 @@ class ControlNode(Node):
 
 
 def main(args: list[str] | None = None) -> None:
-    rclpy.init(args=args)
+    rclpy.init(args=args, signal_handler_options=SignalHandlerOptions.NO)
     node = ControlNode()
     try:
         rclpy.spin(node)
     except KeyboardInterrupt:
         pass
     finally:
+        node.shutdown_to_safe_hold()
         node.destroy_node()
-        rclpy.shutdown()
+        if rclpy.ok(context=node.context):
+            rclpy.shutdown(context=node.context)

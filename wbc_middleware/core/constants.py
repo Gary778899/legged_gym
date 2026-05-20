@@ -24,6 +24,7 @@ DEFAULT_IMU_TOPIC = "/aima/hal/imu/torso/state"
 DEFAULT_JOINT_STATE_TOPIC = "/aima/hal/joint/leg/state"
 DEFAULT_JOINT_COMMAND_TOPIC = "/aima/hal/joint/leg/command"
 DEFAULT_STARTUP_TRIGGER_SERVICE = "/aima/middleware/startup"
+DEFAULT_STOP_TRIGGER_SERVICE = "/aima/middleware/stop"
 DEFAULT_INTERACTIVE_COMMAND_TOPIC = "/aima/middleware/command"
 
 CONTROL_PERIOD_S = 0.02

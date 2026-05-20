@@ -27,6 +27,8 @@ class RuntimeMetadata:
     rnn_hidden_size: int
     rnn_num_layers: int
     action_scale: float
+    clip_actions: float
+    clip_observations: float
     kp: np.ndarray
     kd: np.ndarray
     ang_vel_scale: float
@@ -111,6 +113,24 @@ def load_runtime_metadata(
             0.25,
         )
     )
+    clip_actions = float(
+        _coalesce(
+            normalization_payload.get("clip_actions")
+            if isinstance(normalization_payload, dict)
+            else None,
+            yaml_config.get("clip_actions"),
+            100.0,
+        )
+    )
+    clip_observations = float(
+        _coalesce(
+            normalization_payload.get("clip_observations")
+            if isinstance(normalization_payload, dict)
+            else None,
+            yaml_config.get("clip_observations"),
+            100.0,
+        )
+    )
     kp = _resolve_joint_vector(
         control_payload.get("kp") if isinstance(control_payload, dict) else None,
         yaml_config.get("kps"),
@@ -160,6 +180,8 @@ def load_runtime_metadata(
         rnn_hidden_size=rnn_hidden_size,
         rnn_num_layers=rnn_num_layers,
         action_scale=action_scale,
+        clip_actions=clip_actions,
+        clip_observations=clip_observations,
         kp=kp,
         kd=kd,
         ang_vel_scale=ang_vel_scale,
