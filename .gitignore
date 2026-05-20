@@ -170,6 +170,7 @@ cython_debug/
 
 # logs
 logs
+record/
 
 # exported videos
 videos
@@ -185,5 +186,6 @@ videos
 *.txt
 
 # agibot SDK
-aimsdk/
-record/
+wbc_middleware/aimdk_msgs/
+*.onnx
+
