@@ -84,7 +84,7 @@ class LeggedRobotCfg(BaseConfig):
         density = 0.001
         angular_damping = 0.
         linear_damping = 0.
-        max_angular_velocity = 1000.
+        max_angular_velocity = 100.
         max_linear_velocity = 1000.
         armature = 0.
         thickness = 0.01
