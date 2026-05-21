@@ -183,3 +183,54 @@ class X2FullBodyRobot(X2Robot):
             raise NameError(f"Unknown controller type: {control_type}")
 
         return torch.clip(torques, -self.torque_limits, self.torque_limits)
+
+    def _reward_torques(self):
+        # Keep the torque penalty aligned with the 12-DoF locomotion task.
+        lower_body_torques = self.torques[:, self.lower_body_indices]
+        return torch.sum(torch.square(lower_body_torques), dim=1)
+
+    def _reward_dof_vel(self):
+        # Restrict velocity penalties to the policy-controlled lower body.
+        lower_body_dof_vel = self.dof_vel[:, self.lower_body_indices]
+        return torch.sum(torch.square(lower_body_dof_vel), dim=1)
+
+    def _reward_dof_acc(self):
+        # Restrict acceleration penalties to the policy-controlled lower body.
+        lower_body_dof_vel = self.dof_vel[:, self.lower_body_indices]
+        lower_body_last_dof_vel = self.last_dof_vel[:, self.lower_body_indices]
+        return torch.sum(torch.square((lower_body_last_dof_vel - lower_body_dof_vel) / self.dt), dim=1)
+
+    def _reward_dof_pos_limits(self):
+        # Only penalize lower-body joints for approaching position limits.
+        lower_body_dof_pos = self.dof_pos[:, self.lower_body_indices]
+        lower_body_dof_pos_limits = self.dof_pos_limits[self.lower_body_indices]
+        out_of_limits = -(lower_body_dof_pos - lower_body_dof_pos_limits[:, 0]).clip(max=0.0)
+        out_of_limits += (lower_body_dof_pos - lower_body_dof_pos_limits[:, 1]).clip(min=0.0)
+        return torch.sum(out_of_limits, dim=1)
+
+    def _reward_dof_vel_limits(self):
+        # Only penalize lower-body joints for approaching velocity limits.
+        lower_body_dof_vel = self.dof_vel[:, self.lower_body_indices]
+        lower_body_dof_vel_limits = self.dof_vel_limits[self.lower_body_indices]
+        vel_error = (
+            torch.abs(lower_body_dof_vel)
+            - lower_body_dof_vel_limits * self.cfg.rewards.soft_dof_vel_limit
+        ).clip(min=0.0, max=1.0)
+        return torch.sum(vel_error, dim=1)
+
+    def _reward_torque_limits(self):
+        # Only penalize lower-body joints for approaching torque limits.
+        lower_body_torques = self.torques[:, self.lower_body_indices]
+        lower_body_torque_limits = self.torque_limits[self.lower_body_indices]
+        torque_error = (
+            torch.abs(lower_body_torques)
+            - lower_body_torque_limits * self.cfg.rewards.soft_torque_limit
+        ).clip(min=0.0)
+        return torch.sum(torque_error, dim=1)
+
+    def _reward_stand_still(self):
+        # Keep the stand-still posture penalty on the lower body only.
+        lower_body_dof_pos = self.dof_pos[:, self.lower_body_indices]
+        lower_body_default_dof_pos = self.default_dof_pos[:, self.lower_body_indices]
+        lower_body_error = torch.abs(lower_body_dof_pos - lower_body_default_dof_pos)
+        return torch.sum(lower_body_error, dim=1) * (torch.norm(self.commands[:, :2], dim=1) < 0.1)

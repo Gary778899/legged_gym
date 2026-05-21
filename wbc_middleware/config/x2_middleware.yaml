@@ -1,7 +1,7 @@
 node_name: control_middleware
 
-policy_path: wbc_middleware/policy.onnx
-metadata_path: wbc_middleware/onnx_metadata.json
+policy_path: wbc_middleware/policy/May21_18-47-32_/model_1300.onnx
+metadata_path: wbc_middleware/policy/May21_18-47-32_/onnx_metadata.json
 
 imu_topic: /aima/hal/imu/torso/state
 joint_state_topic: /aima/hal/joint/leg/state

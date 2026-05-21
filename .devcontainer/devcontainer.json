@@ -8,7 +8,9 @@
   "remoteEnv": {
     "PROJECT_ROOT": "/workspace/legged_gym",
     "ROS_WS": "/workspace/.ros2_ws",
-    "PYTHONPATH": "/workspace/legged_gym"
+    "PYTHONPATH": "/workspace/legged_gym",
+    "DISPLAY": "${localEnv:DISPLAY}",
+    "XAUTHORITY": "/tmp/.Xauthority"
   },
   "customizations": {
     "vscode": {
