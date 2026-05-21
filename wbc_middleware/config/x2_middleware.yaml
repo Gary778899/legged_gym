@@ -1,7 +1,7 @@
 node_name: control_middleware
 
-policy_path: wbc_middleware/policy/May21_18-47-32_/model_1300.onnx
-metadata_path: wbc_middleware/policy/May21_18-47-32_/onnx_metadata.json
+policy_path: logs/x2_fullbody/May21_20-38-18_/model_2000.onnx
+metadata_path: logs/x2_fullbody/May21_20-38-18_/onnx_metadata.json
 
 imu_topic: /aima/hal/imu/torso/state
 joint_state_topic: /aima/hal/joint/leg/state
@@ -83,19 +83,26 @@ upper_body:
     kd: [4.0, 4.0, 4.0, 2.0, 2.0, 2.0, 2.0, 2.0, 2.0, 2.0, 2.0, 2.0, 2.0, 2.0, 2.0, 2.0, 2.0, 2.0, 2.0]
 
   stabilization:
-    enabled: true
-    waist_pitch_kp: 0.5
-    waist_pitch_kd: 0.05
-    waist_roll_kp: 0.6
-    waist_roll_kd: 0.08
-    max_pitch_offset: 0.08
-    max_roll_offset: 0.06
-    waist_kp_scale: 0.25
-    waist_kd_scale: 1.10
-    arm_kp_scale: 0.08
-    arm_kd_scale: 1.10
-    head_kp_scale: 0.05
-    head_kd_scale: 1.00
+    enabled: false
+    waist_kp_scale: 1.0
+    waist_kd_scale: 1.0
+    arm_kp_scale: 1.0
+    arm_kd_scale: 1.0
+    head_kp_scale: 1.0
+    head_kd_scale: 1.0
+    # enabled: true
+    # waist_pitch_kp: 0.5
+    # waist_pitch_kd: 0.05
+    # waist_roll_kp: 0.6
+    # waist_roll_kd: 0.08
+    # max_pitch_offset: 0.08
+    # max_roll_offset: 0.06
+    # waist_kp_scale: 0.25
+    # waist_kd_scale: 1.10
+    # arm_kp_scale: 0.08
+    # arm_kd_scale: 1.10
+    # head_kp_scale: 0.05
+    # head_kd_scale: 1.00
 
 upper_body_topics:
   waist: /aima/hal/joint/waist/command

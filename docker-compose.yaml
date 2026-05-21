@@ -35,7 +35,7 @@ services:
       - ros2_overlay:/workspace/.ros2_ws
       - uv_cache:/root/.cache/uv
       - /tmp/.X11-unix:/tmp/.X11-unix:rw
-      - ${HOME}/.Xauthority:/tmp/.Xauthority:rw
+      - ${XAUTHORITY}:/tmp/.Xauthority:rw
 
 volumes:
   ros2_overlay:

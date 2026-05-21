@@ -179,6 +179,8 @@ class ControlNode(Node):
             num_envs=1,
         )
 
+        # Match training: phase is a normalized gait clock in [0, 1),
+        # then the observation uses sin(2*pi*phase), cos(2*pi*phase).
         self.phase = 0.0
         self.print_counter = 0
         self.control_period_s = float(self.config.get('control_period_s', CONTROL_PERIOD_S))
@@ -318,7 +320,8 @@ class ControlNode(Node):
         )
 
     def run_policy_step(self) -> np.ndarray:
-        self.phase = (self.phase + self.control_period_s) % (2 * np.pi)
+        gait_period_s = 1.0
+        self.phase = (self.phase + self.control_period_s / gait_period_s) % 1.0
         observations = self.build_observations()
         action = self.policy_runner.run(observations)
         self.state.last_action = action

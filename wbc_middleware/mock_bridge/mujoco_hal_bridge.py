@@ -91,7 +91,7 @@ class MujocoHalBridge(Node):
         self._model = mujoco.MjModel.from_xml_path(str(xml_path))
         self._data = mujoco.MjData(self._model)
         self._model.opt.timestep = self._simulation_dt
-        self._torso_body_id = self._lookup_body_id("torso_link")
+        self._imu_body_id = self._lookup_body_id("pelvis")
 
         imu_topic = str(self._config.get("imu_topic", DEFAULT_IMU_TOPIC))
         joint_state_topic = str(self._config.get("joint_state_topic", DEFAULT_JOINT_STATE_TOPIC))
@@ -210,18 +210,20 @@ class MujocoHalBridge(Node):
     def _publish_imu(self, now_msg) -> None:
         imu_message = Imu()
         imu_message.header.stamp = now_msg
-        imu_message.header.frame_id = "torso_link"
+        imu_message.header.frame_id = "pelvis"
 
-        torso_quat_wxyz = self._data.xquat[self._torso_body_id]
-        imu_message.orientation.x = float(torso_quat_wxyz[1])
-        imu_message.orientation.y = float(torso_quat_wxyz[2])
-        imu_message.orientation.z = float(torso_quat_wxyz[3])
-        imu_message.orientation.w = float(torso_quat_wxyz[0])
+        # Policy observations are trained against the pelvis/root orientation, not torso_link.
+        pelvis_quat_wxyz = self._data.xquat[self._imu_body_id]
+        imu_message.orientation.x = float(pelvis_quat_wxyz[1])
+        imu_message.orientation.y = float(pelvis_quat_wxyz[2])
+        imu_message.orientation.z = float(pelvis_quat_wxyz[3])
+        imu_message.orientation.w = float(pelvis_quat_wxyz[0])
 
-        torso_angular_velocity = self._data.qvel[3:6]
-        imu_message.angular_velocity.x = float(torso_angular_velocity[0])
-        imu_message.angular_velocity.y = float(torso_angular_velocity[1])
-        imu_message.angular_velocity.z = float(torso_angular_velocity[2])
+        # Free-joint angular velocity belongs to the floating-base pelvis/root body.
+        pelvis_angular_velocity = self._data.qvel[3:6]
+        imu_message.angular_velocity.x = float(pelvis_angular_velocity[0])
+        imu_message.angular_velocity.y = float(pelvis_angular_velocity[1])
+        imu_message.angular_velocity.z = float(pelvis_angular_velocity[2])
 
         imu_message.orientation_covariance[0] = 0.0
         imu_message.angular_velocity_covariance[0] = 0.0
