@@ -50,6 +50,64 @@ safety:
   safe_hold_mode: damping
   safe_hold_damping: [5, 5, 5, 5, 3, 2, 5, 5, 5, 5, 3, 2]
 
+upper_body:
+  enabled: true
+  publish_in_mock: true
+  joint_names:
+    - waist_yaw_joint
+    - waist_pitch_joint
+    - waist_roll_joint
+    - left_shoulder_pitch_joint
+    - left_shoulder_roll_joint
+    - left_shoulder_yaw_joint
+    - left_elbow_joint
+    - left_wrist_yaw_joint
+    - left_wrist_pitch_joint
+    - left_wrist_roll_joint
+    - right_shoulder_pitch_joint
+    - right_shoulder_roll_joint
+    - right_shoulder_yaw_joint
+    - right_elbow_joint
+    - right_wrist_yaw_joint
+    - right_wrist_pitch_joint
+    - right_wrist_roll_joint
+    - head_yaw_joint
+    - head_pitch_joint
+  default_angles: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, -0.5, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, -0.5, 0.0, 0.0, 0.0, 0.0, 0.0]
+  active_hold:
+    kp: [160.0, 80.0, 80.0, 80.0, 40.0, 40.0, 40.0, 40.0, 40.0, 40.0, 80.0, 40.0, 40.0, 40.0, 40.0, 40.0, 40.0, 20.0, 20.0]
+    kd: [5.0, 5.0, 5.0, 4.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 4.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 2.0, 2.0]
+  safe_hold:
+    mode: hold_position
+    kp: [20.0, 20.0, 20.0, 20.0, 20.0, 20.0, 20.0, 20.0, 20.0, 20.0, 20.0, 20.0, 20.0, 20.0, 20.0, 20.0, 20.0, 20.0, 20.0]
+    kd: [4.0, 4.0, 4.0, 2.0, 2.0, 2.0, 2.0, 2.0, 2.0, 2.0, 2.0, 2.0, 2.0, 2.0, 2.0, 2.0, 2.0, 2.0, 2.0]
+
+  stabilization:
+    enabled: true
+    waist_pitch_kp: 0.5
+    waist_pitch_kd: 0.05
+    waist_roll_kp: 0.6
+    waist_roll_kd: 0.08
+    max_pitch_offset: 0.08
+    max_roll_offset: 0.06
+    waist_kp_scale: 0.25
+    waist_kd_scale: 1.10
+    arm_kp_scale: 0.08
+    arm_kd_scale: 1.10
+    head_kp_scale: 0.05
+    head_kd_scale: 1.00
+
+upper_body_topics:
+  waist: /aima/hal/joint/waist/command
+  arm: /aima/hal/joint/arm/command
+  head: /aima/hal/joint/head/command
+
+
+diagnostics:
+  fall_logger:
+    enabled: true
+    path: logs/csv/control_middleware_fall_log.csv
+
 mock_bridge:
   xml_path: resources/robots/x2/mjcf/scene.xml
   simulation_dt: 0.002

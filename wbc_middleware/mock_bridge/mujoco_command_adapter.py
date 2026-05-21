@@ -10,6 +10,7 @@ from aimdk_msgs.msg import JointCommandArray
 
 @dataclass(frozen=True)
 class CachedJointCommand:
+    joint_order: tuple[str, ...]
     position: np.ndarray
     velocity: np.ndarray
     effort: np.ndarray
@@ -55,6 +56,7 @@ class MujocoCommandAdapter:
     def get_latest_command(self) -> CachedJointCommand:
         with self._lock:
             return CachedJointCommand(
+                joint_order=self._joint_order,
                 position=self._position.copy(),
                 velocity=self._velocity.copy(),
                 effort=self._effort.copy(),
