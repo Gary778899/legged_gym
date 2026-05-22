@@ -20,6 +20,12 @@ class JointCommandTarget:
 
 
 @dataclass(frozen=True)
+class ActionMappingResult:
+    targets: list[JointCommandTarget]
+    safe_action: np.ndarray
+
+
+@dataclass(frozen=True)
 class SafetyLimits:
     action_clip: float
     position_delta_clip: float
@@ -72,6 +78,9 @@ class CommandMapper:
         )
 
     def map_action_to_targets(self, action: np.ndarray) -> list[JointCommandTarget]:
+        return self.map_action(action).targets
+
+    def map_action(self, action: np.ndarray) -> ActionMappingResult:
         action = np.asarray(action, dtype=np.float64)
         if action.shape != (len(JOINT_ORDER),):
             raise ValueError(f"Expected action shape {(len(JOINT_ORDER),)}, got {action.shape}")
@@ -82,7 +91,12 @@ class CommandMapper:
             self.safety_limits.position_delta_clip,
         )
         target_positions = self.default_dof_pos + target_delta
-        return self.build_position_targets(target_positions)
+        target_positions = self._clip_joint_positions(target_positions)
+        safe_action_for_obs = self._target_positions_to_action(target_positions)
+        return ActionMappingResult(
+            targets=self.build_position_targets(target_positions),
+            safe_action=safe_action_for_obs,
+        )
 
     def build_default_pose_targets(self) -> list[JointCommandTarget]:
         return self.build_position_targets(self.default_dof_pos)
@@ -143,6 +157,12 @@ class CommandMapper:
         if action_clip <= 0.0:
             return np.zeros_like(action)
         return np.clip(action, -action_clip, action_clip)
+
+    def _target_positions_to_action(self, target_positions: np.ndarray) -> np.ndarray:
+        action_scale = float(self.metadata.action_scale)
+        if action_scale == 0.0:
+            return np.zeros(len(JOINT_ORDER), dtype=np.float64)
+        return (target_positions - self.default_dof_pos) / action_scale
 
     def _clip_joint_positions(self, target_positions: np.ndarray) -> np.ndarray:
         if self.safety_limits.joint_position_lower is not None:

@@ -2,6 +2,8 @@
 
 Date: 2026-05-21
 
+Updated: 2026-05-22
+
 ## Scope
 
 This note records the short conclusion for the recent `x2_fullbody` middleware + MuJoCo closed-loop standing validation.
@@ -77,6 +79,24 @@ The mock bridge previously mixed:
 
 This was corrected in `wbc_middleware/mock_bridge/mujoco_hal_bridge.py` so that the IMU used by the policy now matches pelvis/root semantics consistently.
 
+### 4. Previous-action observation was aligned with safety clipping
+
+The middleware now feeds the policy the safe-applied action equivalent in the next observation, not the raw policy output.
+
+Before this fix:
+
+- the ONNX policy output was stored directly as `state.last_action`
+- safety clipping could still reduce the target before command publication
+- the next observation could therefore claim the previous action was larger than what the robot actually received
+
+After this fix:
+
+- action mapping applies `action_clip`, `position_delta_clip`, and optional joint position clipping
+- the final safe target position is converted back to normalized action space
+- that safe action equivalent becomes the next observation's previous-action field
+
+This better matches training semantics, where the action term in the observation represents the action that actually drove the simulated controller path.
+
 ## Practical Interpretation
 
 The current result means:
@@ -84,6 +104,7 @@ The current result means:
 - the middleware closed loop is working
 - the `x2_fullbody` ONNX policy is working inside the middleware path
 - lower-body policy control plus fixed upper-body PD hold is now consistent enough to achieve stable standing in MuJoCo
+- previous-action observation history is now consistent with middleware safety clipping
 
 This also confirms that the previous instability was mainly caused by deployment-side semantic mismatches, not only by policy quality.
 
@@ -95,4 +116,5 @@ Possible later follow-up:
 
 - reduce steady-state pitch bias
 - validate command tracking beyond zero-command standing
+- align runtime command semantics with training command semantics before serious turning tests
 - repeat the same checks on real-HAL-connected deployment

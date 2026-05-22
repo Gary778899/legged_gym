@@ -1,7 +1,7 @@
 node_name: control_middleware
 
-policy_path: logs/x2_fullbody/May21_20-38-18_/model_2000.onnx
-metadata_path: logs/x2_fullbody/May21_20-38-18_/onnx_metadata.json
+policy_path: logs/x2_fullbody/May21_22-57-32_dr2/model_2000.onnx
+metadata_path: logs/x2_fullbody/May21_22-57-32_dr2/onnx_metadata.json
 
 imu_topic: /aima/hal/imu/torso/state
 joint_state_topic: /aima/hal/joint/leg/state

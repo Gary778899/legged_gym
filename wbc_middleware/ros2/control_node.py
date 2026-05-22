@@ -324,8 +324,9 @@ class ControlNode(Node):
         self.phase = (self.phase + self.control_period_s / gait_period_s) % 1.0
         observations = self.build_observations()
         action = self.policy_runner.run(observations)
-        self.state.last_action = action
-        targets = self.command_mapper.map_action_to_targets(action)
+        mapped_action = self.command_mapper.map_action(action)
+        self.state.last_action = mapped_action.safe_action
+        targets = mapped_action.targets
         self._publish_control_targets(targets, upper_body_mode='active_hold')
 
         self.print_counter += 1
