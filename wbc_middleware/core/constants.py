@@ -58,6 +58,7 @@ DEFAULT_ARM_COMMAND_TOPIC = "/aima/hal/joint/arm/command"
 DEFAULT_HEAD_COMMAND_TOPIC = "/aima/hal/joint/head/command"
 DEFAULT_STARTUP_TRIGGER_SERVICE = "/aima/middleware/startup"
 DEFAULT_STOP_TRIGGER_SERVICE = "/aima/middleware/stop"
+DEFAULT_STATUS_TRIGGER_SERVICE = "/aima/middleware/status"
 DEFAULT_INTERACTIVE_COMMAND_TOPIC = "/aima/middleware/command"
 
 CONTROL_PERIOD_S = 0.02

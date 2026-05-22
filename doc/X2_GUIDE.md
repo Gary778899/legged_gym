@@ -42,8 +42,7 @@ Recommended pipeline:
 ## 3.2 Create Environment
 
 ```bash
-conda create -n x2-rl python=3.8
-conda activate x2-rl
+uv create -n python=3.8
 ```
 
 ## 3.3 Install Core Dependencies
@@ -51,8 +50,6 @@ conda activate x2-rl
 ### PyTorch
 
 ```bash
-conda install pytorch==2.3.1 torchvision==0.18.1 torchaudio==2.3.1 pytorch-cuda=12.1 -c pytorch -c nvidia
-# or
 uv pip install torch==2.3.1 torchvision==0.18.1 torchaudio==2.3.1 --index-url https://download.pytorch.org/whl/cu121
 ```
 
@@ -63,7 +60,7 @@ uv pip install torch==2.3.1 torchvision==0.18.1 torchaudio==2.3.1 --index-url ht
 
 ```bash
 cd isaacgym/python
-pip install -e .
+uv pip install -e .
 ```
 
 3. Verify:
@@ -79,23 +76,14 @@ python 1080_balls_of_solitude.py
 git clone https://github.com/leggedrobotics/rsl_rl.git
 cd rsl_rl
 git checkout v1.0.2
-pip install -e .
+uv pip install -e .
 ```
 
 ### This repository
 
 ```bash
 cd legged_gym
-pip install -e .
-```
-
-### Optional: robot SDK Python package (for real robot communication)
-
-```bash
-# Replace with your robot SDK repository if needed
-git clone <your_robot_sdk_repo>
-cd <your_robot_sdk_dir>
-pip install -e .
+uv pip install -e .
 ```
 
 ## 4. Command Examples (X2)

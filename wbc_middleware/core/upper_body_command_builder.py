@@ -35,19 +35,25 @@ class UpperBodyCommandBuilder:
         )
 
     def build_safe_hold_targets(self) -> list[JointCommandTarget]:
-        return self._build_targets(self._config.safe_hold)
+        return self._build_targets(
+            self._config.safe_hold,
+            reference_positions=self._config.safe_hold_angles,
+        )
 
     def _build_targets(
         self,
         profile: UpperBodyHoldProfile,
         *,
         active_stabilization: dict[str, float] | None = None,
+        reference_positions: np.ndarray | None = None,
     ) -> list[JointCommandTarget]:
         active_stabilization = active_stabilization or {}
         stabilization = self._config.stabilization
+        if reference_positions is None:
+            reference_positions = self._config.default_angles
         targets: list[JointCommandTarget] = []
         for index, joint_name in enumerate(self._config.joint_names):
-            position = float(self._config.default_angles[index])
+            position = float(reference_positions[index])
             stiffness = float(profile.kp[index])
             damping = float(profile.kd[index])
 

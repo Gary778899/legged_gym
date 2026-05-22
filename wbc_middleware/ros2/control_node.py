@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import csv
+import json
 from enum import Enum
 from math import asin, atan2
 from pathlib import Path
@@ -27,14 +28,22 @@ from wbc_middleware.core.constants import (
     DEFAULT_JOINT_COMMAND_TOPIC,
     DEFAULT_JOINT_STATE_TOPIC,
     DEFAULT_STARTUP_TRIGGER_SERVICE,
+    DEFAULT_STATUS_TRIGGER_SERVICE,
     DEFAULT_STOP_TRIGGER_SERVICE,
     DEFAULT_WAIST_COMMAND_TOPIC,
+    JOINT_ORDER,
     JOINT_NAME_TO_INDEX,
 )
 from wbc_middleware.core.metadata_loader import load_runtime_metadata, load_yaml_config
 from wbc_middleware.core.observation_builder import ObservationBuilder
 from wbc_middleware.core.onnx_policy_runner import OnnxPolicyRunner
 from wbc_middleware.core.robot_state import RobotState
+from wbc_middleware.core.safety_monitor import (
+    SafetyDecision,
+    SafetyMonitor,
+    SafetyMonitorConfig,
+    SafetySeverity,
+)
 from wbc_middleware.core.upper_body_command_builder import (
     UpperBodyCommandBuilder,
     split_upper_body_targets_by_area,
@@ -160,6 +169,14 @@ class ControlNode(Node):
                 ),
             ),
         )
+        self.safety_monitor = SafetyMonitor(
+            SafetyMonitorConfig.from_config(
+                safety_config.get('monitor'),
+                num_joints=len(self.default_dof_pos),
+            ),
+            default_dof_pos=self.default_dof_pos,
+            safety_limits=self.command_mapper.safety_limits,
+        )
         self.command_source = build_command_source(self.config.get('command_source'))
         self.leg_command_publisher = HalCommandPublisher(
             self,
@@ -209,6 +226,8 @@ class ControlNode(Node):
         self._state_timeout_reported = False
         self._state_ready_once = False
         self._shutdown_requested = False
+        self._last_lower_body_command_positions: np.ndarray | None = None
+        self.last_safe_stop_reason: str | None = None
         self._fall_logger = self._build_fall_logger()
 
         imu_topic = str(self.config.get('imu_topic', DEFAULT_IMU_TOPIC))
@@ -221,6 +240,9 @@ class ControlNode(Node):
         )
         stop_service_name = str(
             self.config.get('stop_trigger_service', DEFAULT_STOP_TRIGGER_SERVICE)
+        )
+        status_service_name = str(
+            self.config.get('status_trigger_service', DEFAULT_STATUS_TRIGGER_SERVICE)
         )
         self.create_subscription(Imu, imu_topic, self.imu_callback, qos_profile_sensor_data)
         self.create_subscription(
@@ -244,6 +266,11 @@ class ControlNode(Node):
             Trigger,
             stop_service_name,
             self._handle_stop_trigger,
+        )
+        self.status_service = self.create_service(
+            Trigger,
+            status_service_name,
+            self._handle_status_trigger,
         )
         self.timer = self.create_timer(self.control_period_s, self._control_loop)
         self.get_logger().info(
@@ -381,15 +408,25 @@ class ControlNode(Node):
         response.message = f'Safe stop accepted: entering {self.startup_state.value}.'
         return response
 
+    def _handle_status_trigger(
+        self, request: Trigger.Request, response: Trigger.Response
+    ) -> Trigger.Response:
+        del request
+        response.success = True
+        response.message = json.dumps(self._build_status_snapshot(), separators=(',', ':'))
+        return response
+
     def _transition_to(self, next_state: StartupState) -> None:
         previous_state = self.startup_state
         self.startup_state = next_state
         if next_state is StartupState.IDLE:
             self.policy_hold_started_at_s = None
             self.stopping_started_at_s = None
+            self.last_safe_stop_reason = None
         elif next_state is StartupState.MOVE_TO_DEFAULT:
             self.policy_hold_started_at_s = None
             self.stopping_started_at_s = None
+            self.last_safe_stop_reason = None
         elif next_state is StartupState.POLICY_HOLD:
             self.reset_lstm_memory()
             self.policy_hold_started_at_s = self._clock_now_s()
@@ -433,8 +470,16 @@ class ControlNode(Node):
     def request_safe_stop(self, reason: str) -> None:
         if self.startup_state in (StartupState.IDLE, StartupState.STOPPING, StartupState.SAFE_HOLD):
             return
+        self.last_safe_stop_reason = reason
         self._log_warning(f'Requesting safe stop: {reason}')
         self._transition_to(StartupState.STOPPING)
+
+    def request_safe_hold(self, reason: str) -> None:
+        if self.startup_state is StartupState.SAFE_HOLD:
+            return
+        self.last_safe_stop_reason = reason
+        self._log_warning(f'Requesting safe hold: {reason}')
+        self._transition_to(StartupState.SAFE_HOLD)
 
     def publish_safe_hold(self, reason: str | None = None) -> None:
         if not self._context_is_ok():
@@ -471,6 +516,13 @@ class ControlNode(Node):
         self._state_ready_once = True
 
         if self.startup_state is StartupState.IDLE:
+            return
+
+        safety_decision = self._evaluate_safety_monitor()
+        if safety_decision is not None:
+            self._apply_safety_decision(safety_decision)
+            if self.startup_state in (StartupState.STOPPING, StartupState.SAFE_HOLD):
+                self.publish_safe_hold(safety_decision.reason)
             return
 
         if self.startup_state is StartupState.MOVE_TO_DEFAULT:
@@ -526,6 +578,9 @@ class ControlNode(Node):
         *,
         upper_body_mode: str | None = None,
     ) -> None:
+        self._last_lower_body_command_positions = self._extract_target_positions(
+            lower_body_targets
+        )
         self.leg_command_publisher.publish(lower_body_targets)
         upper_body_targets = self._publish_upper_body_targets(upper_body_mode)
         self._log_fall_frame(lower_body_targets, upper_body_targets)
@@ -612,6 +667,26 @@ class ControlNode(Node):
         pitch = asin(sinp)
         return roll, pitch
 
+    def _evaluate_safety_monitor(self) -> SafetyDecision | None:
+        return self.safety_monitor.evaluate(
+            state=self.state,
+            startup_state=self.startup_state.value,
+            commanded_joint_positions=self._last_lower_body_command_positions,
+        )
+
+    def _apply_safety_decision(self, decision: SafetyDecision) -> None:
+        if decision.severity is SafetySeverity.SAFE_HOLD:
+            self.request_safe_hold(decision.reason)
+            return
+        self.request_safe_stop(decision.reason)
+
+    def _extract_target_positions(self, lower_body_targets) -> np.ndarray:
+        position_by_name = {target.name: float(target.position) for target in lower_body_targets}
+        return np.asarray(
+            [position_by_name[name] for name in JOINT_ORDER],
+            dtype=np.float64,
+        )
+
 
     def _build_fall_logger(self) -> FallLogger:
         diagnostics = self.config.get('diagnostics', {}) or {}
@@ -681,6 +756,50 @@ class ControlNode(Node):
     def _clock_now_s(self) -> float:
         now = self.get_clock().now()
         return float(now.nanoseconds) * 1e-9
+
+    def _build_status_snapshot(self) -> dict[str, object]:
+        now_s = self._clock_now_s()
+        imu_age_s = self._sample_age_s(self.state.imu_stamp_s, now_s, self.imu_ready)
+        joint_age_s = self._sample_age_s(self.state.joint_stamp_s, now_s, self.joints_ready)
+        has_fresh_state = self.has_fresh_state()
+        safety_state = 'ok'
+        if self.startup_state is StartupState.SAFE_HOLD:
+            safety_state = 'safe_hold_active'
+        elif self.startup_state is StartupState.STOPPING:
+            safety_state = 'stopping'
+        elif not self.imu_ready or not self.joints_ready:
+            safety_state = 'waiting_for_state'
+        elif not has_fresh_state:
+            safety_state = 'state_timeout'
+        return {
+            'node_name': self.get_name(),
+            'startup_state': self.startup_state.value,
+            'safety_state': safety_state,
+            'can_start': self.startup_state is StartupState.IDLE,
+            'can_stop': self.startup_state not in (StartupState.IDLE, StartupState.SAFE_HOLD),
+            'has_fresh_state': has_fresh_state,
+            'imu_ready': self.imu_ready,
+            'joints_ready': self.joints_ready,
+            'imu_age_s': imu_age_s,
+            'joint_age_s': joint_age_s,
+            'state_timeout_s': self.state_timeout_s,
+            'safe_hold_mode': self.safe_hold_mode,
+            'last_safe_stop_reason': self.last_safe_stop_reason,
+            'max_default_pose_error': self._max_default_pose_error() if self.joints_ready else None,
+            'interactive_command_active': self._interactive_command_is_active(now_s),
+        }
+
+    def _interactive_command_is_active(self, now_s: float) -> bool:
+        return bool(
+            self.interactive_command is not None
+            and self.interactive_command_stamp_s is not None
+            and (now_s - self.interactive_command_stamp_s) <= self.interactive_command_timeout_s
+        )
+
+    def _sample_age_s(self, stamp_s: float, now_s: float, ready: bool) -> float | None:
+        if not ready:
+            return None
+        return max(0.0, now_s - float(stamp_s))
 
     def _resolve_project_path(self, path_value: str | None) -> Path:
         if not path_value:

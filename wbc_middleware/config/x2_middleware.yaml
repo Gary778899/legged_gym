@@ -8,6 +8,7 @@ joint_state_topic: /aima/hal/joint/leg/state
 joint_command_topic: /aima/hal/joint/leg/command
 startup_trigger_service: /aima/middleware/startup
 stop_trigger_service: /aima/middleware/stop
+status_trigger_service: /aima/middleware/status
 interactive_command_topic: /aima/middleware/command
 interactive_command_timeout_s: 0.5
 
@@ -49,6 +50,34 @@ safety:
   #safe_hold_mode: hold_position
   safe_hold_mode: damping
   safe_hold_damping: [5, 5, 5, 5, 3, 2, 5, 5, 5, 5, 3, 2]
+  joint_position_lower: [-2.704, -0.235, -2.844, -0.12, -0.803, -0.2625, -2.704, -2.906, -2.844, -0.12, -0.803, -0.2625]
+  joint_position_upper: [2.556, 2.906, 2.844, 2.618, 0.453, 0.2625, 2.556, 0.235, 2.844, 2.618, 0.453, 0.2625]
+  monitor:
+    enabled: true
+    check_states: [MOVE_TO_DEFAULT, POLICY_HOLD, POLICY_ACTIVE]
+    nominal_pose_check_states: [POLICY_HOLD]
+    tracking_error_check_states: [MOVE_TO_DEFAULT, POLICY_HOLD]
+    imu:
+      quaternion_norm_tolerance: 0.15
+      roll:
+        stopping: 0.45
+        safe_hold: 0.70
+      pitch:
+        stopping: 0.45
+        safe_hold: 0.70
+      angular_velocity:
+        stopping: [1.8, 1.8, 2.5]
+        safe_hold: [3.2, 3.2, 4.5]
+    joints:
+      nominal_pose_error:
+        stopping: 0.45
+        safe_hold: 0.80
+      tracking_error:
+        stopping: 0.35
+        safe_hold: 0.60
+      position_limit_violation:
+        stopping: 0.03
+        safe_hold: 0.08
 
 upper_body:
   enabled: true
@@ -79,6 +108,7 @@ upper_body:
     kd: [5.0, 5.0, 5.0, 4.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 4.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 2.0, 2.0]
   safe_hold:
     mode: hold_position
+    positions: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
     kp: [20.0, 20.0, 20.0, 20.0, 20.0, 20.0, 20.0, 20.0, 20.0, 20.0, 20.0, 20.0, 20.0, 20.0, 20.0, 20.0, 20.0, 20.0, 20.0]
     kd: [4.0, 4.0, 4.0, 2.0, 2.0, 2.0, 2.0, 2.0, 2.0, 2.0, 2.0, 2.0, 2.0, 2.0, 2.0, 2.0, 2.0, 2.0, 2.0]
 

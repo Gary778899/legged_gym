@@ -181,7 +181,7 @@ videos
 *.bak
 
 # md files
-# *.md
+AGENTS.md
 
 # txt files
 *.txt

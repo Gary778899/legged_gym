@@ -37,6 +37,7 @@ class UpperBodyConfig:
     publish_in_mock: bool
     joint_names: tuple[str, ...]
     default_angles: np.ndarray
+    safe_hold_angles: np.ndarray
     active_hold: UpperBodyHoldProfile
     safe_hold_mode: str
     safe_hold: UpperBodyHoldProfile
@@ -68,6 +69,7 @@ class UpperBodyConfig:
                 publish_in_mock=publish_in_mock,
                 joint_names=(),
                 default_angles=empty.copy(),
+                safe_hold_angles=empty.copy(),
                 active_hold=UpperBodyHoldProfile(kp=empty.copy(), kd=empty.copy()),
                 safe_hold_mode='hold_position',
                 safe_hold=UpperBodyHoldProfile(kp=empty.copy(), kd=empty.copy()),
@@ -114,6 +116,11 @@ class UpperBodyConfig:
         safe_hold_mode = str(safe_hold_section.get('mode', 'hold_position')).lower()
         if safe_hold_mode != 'hold_position':
             raise ValueError('upper_body.safe_hold.mode currently only supports hold_position')
+        safe_hold_angles = _resolve_vector(
+            safe_hold_section.get('positions', np.zeros(num_joints, dtype=np.float64)),
+            field_name='upper_body.safe_hold.positions',
+            expected_size=num_joints,
+        )[reorder_index]
         safe_hold = _resolve_hold_profile(
             safe_hold_section,
             field_prefix='upper_body.safe_hold',
@@ -126,6 +133,7 @@ class UpperBodyConfig:
             publish_in_mock=publish_in_mock,
             joint_names=joint_names,
             default_angles=default_angles,
+            safe_hold_angles=safe_hold_angles,
             active_hold=active_hold,
             safe_hold_mode=safe_hold_mode,
             safe_hold=safe_hold,
